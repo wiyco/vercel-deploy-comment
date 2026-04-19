@@ -1,0 +1,52 @@
+name: "Vercel Deploy Comment"
+description: "Deploy one or more Vercel previews and keep a Vercel-style pull request comment updated."
+author: "vercel-deploy-comment contributors"
+
+inputs:
+  github-token:
+    description: "GitHub token used to list, create, and update pull request comments. Defaults to the workflow GITHUB_TOKEN."
+    required: false
+    default: ${{ github.token }}
+  vercel-token:
+    description: "Vercel token used for deploy execution and Vercel Deployment API enrichment."
+    required: false
+  mode:
+    description: "Either deploy-and-comment or comment-only."
+    required: false
+    default: "deploy-and-comment"
+  deployments:
+    description: "JSON array describing one or more deployments. Each entry renders as a row in the pull request comment."
+    required: true
+  header:
+    description: "Markdown heading text for the pull request comment."
+    required: false
+    default: "Vercel Preview Deployment"
+  footer:
+    description: "Optional Markdown footer appended below the deployment table."
+    required: false
+  comment-marker:
+    description: "Stable marker key used to find and update the existing action comment."
+    required: false
+    default: "default"
+  status:
+    description: "Fallback GitHub Actions status for comment-only mode."
+    required: false
+    default: "success"
+  comment-on-failure:
+    description: "Whether deploy failures should still update the pull request comment before failing the action."
+    required: false
+    default: "true"
+
+outputs:
+  comment-id:
+    description: "ID of the created or updated pull request comment."
+  comment-url:
+    description: "URL of the created or updated pull request comment."
+  deployment-urls:
+    description: "JSON array of preview deployment URLs included in the comment."
+  statuses:
+    description: "JSON array of normalized status keys included in the comment."
+
+runs:
+  using: node24
+  main: dist/index.js

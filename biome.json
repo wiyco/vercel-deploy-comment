@@ -1,0 +1,45 @@
+{
+  "$schema": "https://biomejs.dev/schemas/2.4.12/schema.json",
+  "formatter": {
+    "enabled": true,
+    "indentStyle": "space",
+    "indentWidth": 2,
+    "lineEnding": "lf",
+    "lineWidth": 80,
+    "expand": "always"
+  },
+  "linter": {
+    "enabled": true,
+    "rules": {
+      "recommended": true,
+      "correctness": {
+        "recommended": true,
+        "noUnusedVariables": "error",
+        "noUnusedImports": "error",
+        "noUnusedFunctionParameters": "error"
+      }
+    }
+  },
+  "assist": {
+    "enabled": true,
+    "actions": {
+      "source": {
+        "recommended": true,
+        "organizeImports": "on"
+      }
+    }
+  },
+  "files": {
+    "includes": [
+      ".github/**",
+      ".vscode/**",
+      "src/**",
+      "__tests__/**",
+      "*.{ts,mts}",
+      "*.{js,mjs}",
+      "*.{json,yml,yaml}",
+      "!pnpm-lock.yaml",
+      "**/*.md"
+    ]
+  }
+}

@@ -1,0 +1,55 @@
+{
+  "name": "vercel-deploy-comment",
+  "version": "1.0.0",
+  "description": "A GitHub Action that deploys Vercel previews and keeps a pull request comment updated.",
+  "type": "module",
+  "main": "dist/index.js",
+  "exports": {
+    ".": "./dist/index.js"
+  },
+  "files": [
+    "dist",
+    "action.yml",
+    "docs",
+    "README.md",
+    "LICENSE",
+    "PRIVACY.md",
+    "SECURITY.md",
+    "TERMS.md"
+  ],
+  "scripts": {
+    "typecheck": "tsc -b",
+    "build": "tsc -b && rolldown -c rolldown.config.ts",
+    "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
+    "test:watch": "vitest",
+    "check": "biome check . --error-on-warnings",
+    "check:fix": "biome check . --error-on-warnings --write",
+    "all": "pnpm run check && pnpm test && pnpm run build"
+  },
+  "keywords": [
+    "github-action",
+    "vercel",
+    "pull-request",
+    "preview-deployment"
+  ],
+  "license": "MIT",
+  "engines": {
+    "node": ">=24"
+  },
+  "packageManager": "pnpm@10.33.0",
+  "dependencies": {
+    "@actions/core": "^3.0.0",
+    "@actions/exec": "^3.0.0"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.4.12",
+    "@types/node": "^24.1.0",
+    "@vitest/coverage-v8": "^4.1.4",
+    "cspell": "^10.0.0",
+    "lefthook": "^2.1.6",
+    "rolldown": "^1.0.0-rc.16",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.4"
+  }
+}

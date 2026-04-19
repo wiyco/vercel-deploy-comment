@@ -1,0 +1,33 @@
+coverage:
+  paths:
+    - coverage/lcov.info
+  acceptable: 100%
+  badge:
+    path: docs/assets/coverage.svg
+codeToTestRatio:
+  code:
+    - "src/**/*.ts"
+    - "!src/main.ts"
+    - "!src/shared/types.ts"
+  test:
+    - "__tests__/**/*.test.ts"
+  badge:
+    path: docs/assets/code-to-test-ratio.svg
+testExecutionTime:
+  if: "env.OCTOCOV_RUN_MODE == 'check'"
+diff:
+  if: "env.OCTOCOV_RUN_MODE == 'check'"
+  datastores:
+    - artifact://${GITHUB_REPOSITORY}
+comment:
+  if: "env.OCTOCOV_RUN_MODE == 'check' && is_pull_request"
+  deletePrevious: true
+report:
+  if: "env.OCTOCOV_RUN_MODE == 'check' && is_default_branch"
+  datastores:
+    - artifact://${GITHUB_REPOSITORY}
+summary:
+  if: "env.OCTOCOV_RUN_MODE == 'check'"
+push:
+  if: "env.OCTOCOV_RUN_MODE == 'badge' && is_default_branch"
+  message: "chore: update metric badges [skip ci]"

@@ -1,0 +1,21 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "composite": true,
+    "tsBuildInfoFile": "node_modules/.tmp/tsconfig.test.tsbuildinfo",
+    "outDir": "node_modules/.tmp/types/__tests__",
+    "types": [
+      "node",
+      "vitest/globals"
+    ],
+    "resolveJsonModule": true
+  },
+  "include": [
+    "__tests__/**/*.ts"
+  ],
+  "references": [
+    {
+      "path": "./tsconfig.src.json"
+    }
+  ]
+}

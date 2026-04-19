@@ -1,0 +1,131 @@
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+      actions: read
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v5.0.0
+      - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
+        with:
+          node-version: "24"
+          cache: "pnpm"
+      - run: pnpm install --frozen-lockfile
+      # - run: pnpm audit --audit-level=high # Temporarily disabled due to https://github.com/pnpm/pnpm/issues/11265
+      - run: pnpm run check
+      - run: pnpm run test:coverage
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        id: upload-coverage
+        with:
+          name: coverage-report
+          path: coverage/lcov-report/
+          retention-days: 15
+          if-no-files-found: error
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: coverage-data
+          path: coverage/lcov.info
+          retention-days: 15
+          if-no-files-found: error
+      - name: Prepare octocov config
+        id: prepare-octocov-config
+        env:
+          COVERAGE_ARTIFACT_URL: ${{ steps.upload-coverage.outputs.artifact-url }}
+          GITHUB_SERVER_URL: ${{ github.server_url }}
+        run: |
+          set -euo pipefail
+          OCTOCOV_CONFIG_PATH="$(mktemp "${GITHUB_WORKSPACE}/.octocov.XXXXXX.yml")"
+          export OCTOCOV_CONFIG_PATH
+          cp .octocov.yml "$OCTOCOV_CONFIG_PATH"
+          echo "config-path=$OCTOCOV_CONFIG_PATH" >> "$GITHUB_OUTPUT"
+          if [ -n "$COVERAGE_ARTIFACT_URL" ]; then
+            node --input-type=module <<'EOF'
+          import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
+
+          const artifactUrl = process.env.COVERAGE_ARTIFACT_URL;
+          const configPath = process.env.OCTOCOV_CONFIG_PATH;
+          const repository = process.env.GITHUB_REPOSITORY;
+          const serverUrl = new URL(process.env.GITHUB_SERVER_URL);
+          const url = new URL(artifactUrl);
+
+          if (
+            url.origin !== serverUrl.origin ||
+            !url.pathname.startsWith(`/${repository}/actions/runs/`) ||
+            !url.pathname.includes("/artifacts/")
+          ) {
+            throw new Error(`Unexpected coverage artifact URL: ${artifactUrl}`);
+          }
+
+          const message = `Download coverage report: [lcov-report](${url.href})`;
+          const lines = readFileSync(configPath, "utf8").split("\n");
+          const commentIndex = lines.indexOf("comment:");
+          if (commentIndex === -1) {
+            throw new Error("Missing comment section in octocov config");
+          }
+
+          let insertIndex = commentIndex + 1;
+          while (insertIndex < lines.length && lines[insertIndex].startsWith("  ")) {
+            if (lines[insertIndex].startsWith("  message:")) {
+              lines[insertIndex] = `  message: ${JSON.stringify(message)}`;
+              break;
+            }
+            insertIndex += 1;
+          }
+          if (!lines[insertIndex]?.startsWith("  message:")) {
+            lines.splice(insertIndex, 0, `  message: ${JSON.stringify(message)}`);
+          }
+
+          writeFileSync(configPath, lines.join("\n"));
+          if (process.env.GITHUB_STEP_SUMMARY) {
+            appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${message}\n`);
+          }
+          EOF
+          fi
+      - uses: k1LoW/octocov-action@73d561f65d59e66899ed5c87e4621a913b5d5c20 # v1.5.0
+        env:
+          OCTOCOV_RUN_MODE: check
+        with:
+          config: ${{ steps.prepare-octocov-config.outputs.config-path }}
+          work-dir: ${{ github.workspace }}
+      - run: pnpm run build
+      - name: Verify dist is up to date
+        run: |
+          if [ "$(git status --porcelain dist/)" != "" ]; then
+            echo "dist/ is out of date. Run 'pnpm run build' and commit."
+            exit 1
+          fi
+
+  update-metric-badges:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: check
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: coverage-data
+          path: coverage
+      - uses: actions/create-github-app-token@1b10c78c7865c340bc4f6099eb2f838309f1e8c3 # v3.1.1
+        id: badge-publisher-token
+        with:
+          client-id: ${{ secrets.BADGE_PUBLISHER_CLIENT_ID }}
+          private-key: ${{ secrets.BADGE_PUBLISHER_PRIVATE_KEY }}
+          permission-contents: write
+      - uses: k1LoW/octocov-action@73d561f65d59e66899ed5c87e4621a913b5d5c20 # v1.5.0
+        env:
+          OCTOCOV_RUN_MODE: badge
+        with:
+          github-token: ${{ steps.badge-publisher-token.outputs.token }}
+          config: .octocov.yml
+          work-dir: ${{ github.workspace }}

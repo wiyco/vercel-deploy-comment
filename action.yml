@@ -2,6 +2,10 @@ name: "Vercel Deploy Comment"
 description: "Deploy one or more Vercel previews and keep a Vercel-style pull request comment updated."
 author: "vercel-deploy-comment contributors"
 
+branding:
+  icon: triangle
+  color: gray-dark
+
 inputs:
   github-token:
     description: "GitHub token used to list, create, and update pull request comments. Defaults to the workflow GITHUB_TOKEN."

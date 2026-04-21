@@ -37,9 +37,11 @@
       "__tests__/**",
       "*.{ts,mts}",
       "*.{js,mjs}",
-      "*.{json,yml,yaml}",
+      "*.{json,yml,yaml,md}",
       "!pnpm-lock.yaml",
-      "**/*.md"
+      "!node_modules",
+      "!dist",
+      "!coverage"
     ]
   }
 }

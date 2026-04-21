@@ -1,7 +1,11 @@
 import * as core from "@actions/core";
+import { buildDeploymentRowKey } from "../shared/deployment-key";
 import {
   ACTION_STATUSES,
   type ActionInputs,
+  type BaseDeploymentInput,
+  type CommentOnlyDeploymentInput,
+  type DeployAndCommentDeploymentInput,
   type DeploymentInput,
   MODES,
 } from "../shared/types";
@@ -49,48 +53,61 @@ export interface RawActionInputs {
 
 export function parseActionInputs(raw: RawActionInputs): ActionInputs {
   const githubToken = requireNonEmpty(raw.githubToken, "github-token");
-  const vercelToken = optionalNonEmpty(raw.vercelToken);
+  const vercelToken = optionalString(raw.vercelToken, "vercel-token");
   const mode = parseEnum(raw.mode, MODES, "mode");
   const status = parseEnum(raw.status, ACTION_STATUSES, "status");
-  const deployments = parseDeployments(raw.deployments);
   const commentMarker = parseCommentMarker(raw.commentMarker);
   const header = requireNonEmpty(raw.header, "header").replace(/\r?\n/g, " ");
-  const footer = optionalNonEmpty(raw.footer);
+  const footer = optionalString(raw.footer, "footer");
   const commentOnFailure = parseBoolean(
     raw.commentOnFailure,
     "comment-on-failure",
   );
 
-  if (mode === "deploy-and-comment" && !vercelToken) {
-    throw new InputError(
-      "vercel-token is required when mode is deploy-and-comment.",
-    );
-  }
-
-  if (mode === "comment-only") {
-    for (const [index, deployment] of deployments.entries()) {
-      if (!deployment.deploymentUrl) {
-        throw new InputError(
-          `deployments[${index}].deploymentUrl is required when mode is comment-only.`,
-        );
-      }
-    }
-  }
-
-  return {
+  const commonInputs = {
     githubToken,
-    vercelToken,
-    mode,
-    deployments,
     header,
     footer,
     commentMarker,
     status,
     commentOnFailure,
   };
+
+  if (mode === "deploy-and-comment") {
+    if (!vercelToken) {
+      throw new InputError(
+        "vercel-token is required when mode is deploy-and-comment.",
+      );
+    }
+
+    return {
+      ...commonInputs,
+      vercelToken,
+      mode,
+      deployments: parseDeployments(raw.deployments, mode),
+    };
+  }
+
+  return {
+    ...commonInputs,
+    vercelToken,
+    mode,
+    deployments: parseDeployments(raw.deployments, mode),
+  };
 }
 
-function parseDeployments(rawDeployments: string): DeploymentInput[] {
+function parseDeployments(
+  rawDeployments: string,
+  mode: "deploy-and-comment",
+): DeployAndCommentDeploymentInput[];
+function parseDeployments(
+  rawDeployments: string,
+  mode: "comment-only",
+): CommentOnlyDeploymentInput[];
+function parseDeployments(
+  rawDeployments: string,
+  mode: ActionInputs["mode"],
+): DeploymentInput[] {
   const raw = requireNonEmpty(rawDeployments, "deployments");
   let parsed: unknown;
 
@@ -106,78 +123,113 @@ function parseDeployments(rawDeployments: string): DeploymentInput[] {
     throw new InputError("deployments must be a non-empty JSON array.");
   }
 
-  return parsed.map((item, index) => parseDeploymentInput(item, index));
-}
-
-function parseDeploymentInput(item: unknown, index: number): DeploymentInput {
-  if (!isRecord(item)) {
-    throw new InputError(`deployments[${index}] must be an object.`);
+  if (mode === "deploy-and-comment") {
+    const deployments = parsed.map((item, index) =>
+      parseDeployAndCommentDeploymentInput(item, index),
+    );
+    assertUniqueDeploymentKeys(deployments);
+    return deployments;
   }
 
-  const projectUrl = requireHttpUrl(
+  const deployments = parsed.map((item, index) =>
+    parseCommentOnlyDeploymentInput(item, index),
+  );
+  assertUniqueDeploymentKeys(deployments);
+  return deployments;
+}
+
+function assertUniqueDeploymentKeys(deployments: DeploymentInput[]): void {
+  const seen = new Map<string, number>();
+
+  deployments.forEach((deployment, index) => {
+    const key = buildDeploymentRowKey(
+      deployment.projectId,
+      deployment.environment,
+    );
+    const firstIndex = seen.get(key);
+
+    if (firstIndex !== undefined) {
+      throw new InputError(
+        `deployments[${index}] duplicates deployments[${firstIndex}] for projectId "${deployment.projectId}" and environment "${deployment.environment}". Each (projectId, environment) pair must be unique.`,
+      );
+    }
+
+    seen.set(key, index);
+  });
+}
+
+function parseDeploymentBase(
+  item: Record<string, unknown>,
+  index: number,
+): BaseDeploymentInput {
+  rejectDeprecatedField(item, index, "command");
+  rejectDeprecatedField(item, index, "projectName");
+
+  const projectId = requireNonEmpty(
+    item.projectId,
+    `deployments[${index}].projectId`,
+  );
+  const environment = requireNonEmpty(
+    item.environment,
+    `deployments[${index}].environment`,
+  );
+  const projectUrl = requireHttpsUrl(
     item.projectUrl,
     `deployments[${index}].projectUrl`,
   );
-  const cwd = optionalString(item.cwd, `deployments[${index}].cwd`);
-  const projectName = optionalString(
-    item.projectName,
-    `deployments[${index}].projectName`,
+  const displayName = optionalString(
+    item.displayName,
+    `deployments[${index}].displayName`,
   );
   const teamId = optionalString(item.teamId, `deployments[${index}].teamId`);
   const slug = optionalString(item.slug, `deployments[${index}].slug`);
-  const deploymentUrl = optionalHttpUrl(
-    item.deploymentUrl,
-    `deployments[${index}].deploymentUrl`,
-  );
-  const command = parseOptionalCommand(
-    item.command,
-    `deployments[${index}].command`,
-  );
 
   return {
-    cwd,
-    command,
-    deploymentUrl,
-    projectName,
+    displayName,
+    environment,
+    projectId,
     projectUrl,
     teamId,
     slug,
   };
 }
 
-function parseOptionalCommand(
-  value: unknown,
-  field: string,
-): string | string[] | undefined {
-  if (value === undefined || value === null || value === "") {
-    return undefined;
-  }
+function parseDeployAndCommentDeploymentInput(
+  item: unknown,
+  index: number,
+): DeployAndCommentDeploymentInput {
+  const record = requireRecord(item, `deployments[${index}]`);
+  const base = parseDeploymentBase(record, index);
 
-  if (typeof value === "string") {
-    return requireNonEmpty(value, field);
-  }
-
-  if (Array.isArray(value)) {
-    if (value.length === 0) {
-      throw new InputError(`${field} must not be an empty array.`);
-    }
-
-    return value.map((entry, index) => {
-      const trimmed = typeof entry === "string" ? entry.trim() : undefined;
-
-      if (!trimmed) {
-        throw new InputError(`${field}[${index}] must be a non-empty string.`);
-      }
-
-      return trimmed;
-    });
-  }
-
-  throw new InputError(`${field} must be a string or string array.`);
+  return {
+    ...base,
+    cwd: requireNonEmpty(record.cwd, `deployments[${index}].cwd`),
+    deploymentUrl: optionalHttpsUrl(
+      record.deploymentUrl,
+      `deployments[${index}].deploymentUrl`,
+    ),
+    orgId: requireNonEmpty(record.orgId, `deployments[${index}].orgId`),
+  };
 }
 
-function parseBoolean(value: string, field: string): boolean {
-  const normalized = value.trim().toLowerCase();
+function parseCommentOnlyDeploymentInput(
+  item: unknown,
+  index: number,
+): CommentOnlyDeploymentInput {
+  const record = requireRecord(item, `deployments[${index}]`);
+  const base = parseDeploymentBase(record, index);
+
+  return {
+    ...base,
+    deploymentUrl: requireHttpsUrl(
+      record.deploymentUrl,
+      `deployments[${index}].deploymentUrl`,
+    ),
+  };
+}
+
+function parseBoolean(value: unknown, field: string): boolean {
+  const normalized = requireString(value, field).trim().toLowerCase();
 
   if (normalized === "true") {
     return true;
@@ -203,34 +255,31 @@ function parseCommentMarker(value: string): string {
 }
 
 function parseEnum<const T extends readonly string[]>(
-  value: string,
+  value: unknown,
   values: T,
   field: string,
 ): T[number] {
-  const normalized = value.trim();
+  const normalized = requireString(value, field).trim();
+  const enumValue = values.find((candidate) => candidate === normalized);
 
-  if (values.includes(normalized)) {
-    return normalized as T[number];
+  if (enumValue !== undefined) {
+    return enumValue;
   }
 
   throw new InputError(`${field} must be one of: ${values.join(", ")}.`);
 }
 
 function requireNonEmpty(value: unknown, field: string): string {
-  if (typeof value !== "string" || value.trim().length === 0) {
+  if (value === undefined || value === null) {
     throw new InputError(`${field} is required.`);
   }
 
-  return value.trim();
-}
-
-function optionalNonEmpty(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
+  const trimmed = requireString(value, field).trim();
+  if (trimmed.length === 0) {
+    throw new InputError(`${field} is required.`);
   }
 
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : undefined;
+  return trimmed;
 }
 
 function optionalString(value: unknown, field: string): string | undefined {
@@ -238,15 +287,11 @@ function optionalString(value: unknown, field: string): string | undefined {
     return undefined;
   }
 
-  if (typeof value !== "string") {
-    throw new InputError(`${field} must be a string.`);
-  }
-
-  const trimmed = value.trim();
+  const trimmed = requireString(value, field).trim();
   return trimmed.length > 0 ? trimmed : undefined;
 }
 
-function optionalHttpUrl(value: unknown, field: string): string | undefined {
+function optionalHttpsUrl(value: unknown, field: string): string | undefined {
   if (value === undefined || value === null || value === "") {
     return undefined;
   }
@@ -255,23 +300,31 @@ function optionalHttpUrl(value: unknown, field: string): string | undefined {
     throw new InputError(`${field} must be a URL string.`);
   }
 
-  return requireHttpUrl(value, field);
+  return requireHttpsUrl(value, field);
 }
 
-function requireHttpUrl(value: unknown, field: string): string {
+function requireHttpsUrl(value: unknown, field: string): string {
+  if (value === undefined || value === null || value === "") {
+    throw new InputError(`${field} is required.`);
+  }
+
+  if (typeof value !== "string") {
+    throw new InputError(`${field} must be a URL string.`);
+  }
+
   const raw = requireNonEmpty(value, field);
 
   try {
     const url = new URL(raw);
 
-    if (url.protocol !== "https:" && url.protocol !== "http:") {
-      throw new Error("URL must use http or https.");
+    if (url.protocol !== "https:") {
+      throw new Error("URL must use https.");
     }
 
     return url.toString();
   } catch (error) {
     throw new InputError(
-      `${field} must be a valid http or https URL: ${formatCause(error)}`,
+      `${field} must be a valid https URL: ${formatCause(error)}`,
     );
   }
 }
@@ -280,6 +333,34 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+function requireRecord(value: unknown, field: string): Record<string, unknown> {
+  if (!isRecord(value)) {
+    throw new InputError(`${field} must be an object.`);
+  }
+
+  return value;
+}
+
+function rejectDeprecatedField(
+  value: Record<string, unknown>,
+  index: number,
+  field: "command" | "projectName",
+): void {
+  if (Object.hasOwn(value, field)) {
+    throw new InputError(
+      `deployments[${index}].${field} is no longer supported.`,
+    );
+  }
+}
+
 function formatCause(error: unknown): string {
   return error instanceof Error ? error.message : "unknown error";
+}
+
+function requireString(value: unknown, field: string): string {
+  if (typeof value !== "string") {
+    throw new InputError(`${field} must be a string.`);
+  }
+
+  return value;
 }

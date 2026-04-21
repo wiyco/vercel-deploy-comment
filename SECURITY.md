@@ -53,13 +53,15 @@ Security concerns include, but are not limited to:
 - The default deploy command is executed through `@actions/exec` as an argument vector, not through a shell.
 - A custom `deployments[].command` is still executable workflow configuration. Treat it as trusted code and do not build it from untrusted pull request input.
 - `github-token` and `vercel-token` are registered with `@actions/core.setSecret`.
-- User-supplied table values and link URLs are escaped or validated before they are rendered into the generated Markdown comment.
+- Vercel CLI child processes receive an explicit environment with GitHub Actions `INPUT_*` variables removed, and `VERCEL_TOKEN` is added back only for authenticated Vercel steps.
+- Other workflow-managed secrets remain in scope when the workflow exports them through non-`INPUT_*` environment variables. This action does not attempt to scrub arbitrary caller-provided environment variables.
+- User-supplied table values are escaped, and user-supplied project or preview links must be absolute `https://` URLs before they are rendered into the generated Markdown comment.
 - `footer` is intentionally rendered as caller-provided Markdown. Do not populate it from untrusted pull request data.
 - Existing pull request comments are updated only when both the hidden marker and authenticated GitHub user match.
 
 > [!CAUTION]
 >
-> Pass Vercel credentials through `vercel-token` instead of embedding `--token=...` in `deployments[].command`. This action masks the `vercel-token` input, but it cannot automatically register unrelated tokens written directly into custom commands.
+> Pass Vercel credentials through `vercel-token`. This action masks the `vercel-token` input, removes GitHub Actions `INPUT_*` variables from Vercel CLI child processes, and injects the token into authenticated Vercel CLI steps through `VERCEL_TOKEN`, but it does not scrub unrelated secrets that the workflow exports through other environment variables.
 
 ## Recommended Workflow Hardening
 

@@ -6,9 +6,19 @@ import {
   readActionInputs,
 } from "../../src/action/input";
 
-const validDeployment = {
-  projectName: "web",
+const validDeployAndCommentDeployment = {
+  cwd: "apps/web",
+  orgId: "team_123",
+  projectId: "prj_web",
+  environment: "preview",
   projectUrl: "https://vercel.com/team/web",
+};
+
+const validCommentOnlyDeployment = {
+  projectId: "prj_web",
+  environment: "preview",
+  projectUrl: "https://vercel.com/team/web",
+  deploymentUrl: "https://web-git-feature-team.vercel.app",
 };
 
 function validRawInputs(
@@ -19,7 +29,7 @@ function validRawInputs(
     vercelToken: "vercel_token",
     mode: "deploy-and-comment",
     deployments: JSON.stringify([
-      validDeployment,
+      validDeployAndCommentDeployment,
     ]),
     header: "Preview",
     footer: "footer",
@@ -65,9 +75,13 @@ describe("parseActionInputs", () => {
 
     expect(inputs.mode).toBe("deploy-and-comment");
     expect(inputs.deployments).toHaveLength(1);
-    expect(inputs.deployments[0]?.projectUrl).toBe(
-      "https://vercel.com/team/web",
-    );
+    expect(inputs.deployments[0]).toMatchObject({
+      cwd: "apps/web",
+      orgId: "team_123",
+      projectId: "prj_web",
+      environment: "preview",
+      projectUrl: "https://vercel.com/team/web",
+    });
     expect(inputs.commentMarker).toBe("preview:web");
     expect(inputs.commentOnFailure).toBe(true);
   });
@@ -87,9 +101,161 @@ describe("parseActionInputs", () => {
       parseActionInputs(
         validRawInputs({
           mode: "comment-only",
+          deployments: JSON.stringify([
+            {
+              ...validCommentOnlyDeployment,
+              deploymentUrl: undefined,
+            },
+          ]),
         }),
       ),
     ).toThrow("deploymentUrl is required");
+  });
+
+  it("requires cwd and orgId in deploy-and-comment mode", () => {
+    expect(() =>
+      parseActionInputs(
+        validRawInputs({
+          deployments: JSON.stringify([
+            {
+              ...validDeployAndCommentDeployment,
+              cwd: undefined,
+            },
+          ]),
+        }),
+      ),
+    ).toThrow("deployments[0].cwd is required");
+    expect(() =>
+      parseActionInputs(
+        validRawInputs({
+          deployments: JSON.stringify([
+            {
+              ...validDeployAndCommentDeployment,
+              orgId: undefined,
+            },
+          ]),
+        }),
+      ),
+    ).toThrow("deployments[0].orgId is required");
+  });
+
+  it.each([
+    [
+      "cwd",
+      {
+        cwd: 123,
+      },
+      "deployments[0].cwd must be a string",
+    ],
+    [
+      "orgId",
+      {
+        orgId: 123,
+      },
+      "deployments[0].orgId must be a string",
+    ],
+    [
+      "projectId",
+      {
+        projectId: 123,
+      },
+      "deployments[0].projectId must be a string",
+    ],
+    [
+      "environment",
+      {
+        environment: 123,
+      },
+      "deployments[0].environment must be a string",
+    ],
+  ])("rejects non-string %s values in deploy-and-comment deployments", (_field, overrides, message) => {
+    expect(() =>
+      parseActionInputs(
+        validRawInputs({
+          deployments: JSON.stringify([
+            {
+              ...validDeployAndCommentDeployment,
+              ...overrides,
+            },
+          ]),
+        }),
+      ),
+    ).toThrow(message);
+  });
+
+  it("accepts an optional deploymentUrl in deploy-and-comment mode", () => {
+    const inputs = parseActionInputs(
+      validRawInputs({
+        deployments: JSON.stringify([
+          {
+            ...validDeployAndCommentDeployment,
+            deploymentUrl: "https://web-git-feature-team.vercel.app",
+          },
+        ]),
+      }),
+    );
+
+    expect(inputs.mode).toBe("deploy-and-comment");
+    expect(inputs.deployments[0]).toMatchObject({
+      deploymentUrl: "https://web-git-feature-team.vercel.app/",
+    });
+  });
+
+  it("rejects non-string optional deploymentUrl values in deploy-and-comment mode", () => {
+    expect(() =>
+      parseActionInputs(
+        validRawInputs({
+          deployments: JSON.stringify([
+            {
+              ...validDeployAndCommentDeployment,
+              deploymentUrl: 123,
+            },
+          ]),
+        }),
+      ),
+    ).toThrow("deployments[0].deploymentUrl must be a URL string");
+  });
+
+  it("rejects non-https optional deploymentUrl values in deploy-and-comment mode", () => {
+    expect(() =>
+      parseActionInputs(
+        validRawInputs({
+          deployments: JSON.stringify([
+            {
+              ...validDeployAndCommentDeployment,
+              deploymentUrl: "http://web-git-feature-team.vercel.app",
+            },
+          ]),
+        }),
+      ),
+    ).toThrow("deployments[0].deploymentUrl must be a valid https URL");
+  });
+
+  it("rejects deprecated command and projectName fields", () => {
+    expect(() =>
+      parseActionInputs(
+        validRawInputs({
+          deployments: JSON.stringify([
+            {
+              ...validDeployAndCommentDeployment,
+              command: "vercel deploy",
+            },
+          ]),
+        }),
+      ),
+    ).toThrow("deployments[0].command is no longer supported");
+    expect(() =>
+      parseActionInputs(
+        validRawInputs({
+          deployments: JSON.stringify([
+            {
+              ...validDeployAndCommentDeployment,
+              projectName: "web",
+            },
+          ]),
+        }),
+      ),
+    ).toThrow("deployments[0].projectName is no longer supported");
   });
 
   it("rejects unsafe comment markers", () => {
@@ -102,18 +268,72 @@ describe("parseActionInputs", () => {
     ).toThrow("comment-marker");
   });
 
-  it("rejects deployments without projectUrl", () => {
-    expect(() =>
-      parseActionInputs(
-        validRawInputs({
-          deployments: JSON.stringify([
-            {
-              projectName: "web",
-            },
-          ]),
-        }),
-      ),
-    ).toThrow("projectUrl");
+  it.each([
+    [
+      "github-token",
+      {
+        githubToken: 123 as unknown as string,
+      },
+      "github-token must be a string",
+    ],
+    [
+      "vercel-token",
+      {
+        vercelToken: 123 as unknown as string,
+      },
+      "vercel-token must be a string",
+    ],
+    [
+      "deployments",
+      {
+        deployments: 123 as unknown as string,
+      },
+      "deployments must be a string",
+    ],
+    [
+      "header",
+      {
+        header: 123 as unknown as string,
+      },
+      "header must be a string",
+    ],
+    [
+      "footer",
+      {
+        footer: 123 as unknown as string,
+      },
+      "footer must be a string",
+    ],
+    [
+      "comment-marker",
+      {
+        commentMarker: 123 as unknown as string,
+      },
+      "comment-marker must be a string",
+    ],
+    [
+      "mode",
+      {
+        mode: 123 as unknown as string,
+      },
+      "mode must be a string",
+    ],
+    [
+      "status",
+      {
+        status: 123 as unknown as string,
+      },
+      "status must be a string",
+    ],
+    [
+      "comment-on-failure",
+      {
+        commentOnFailure: 123 as unknown as string,
+      },
+      "comment-on-failure must be a string",
+    ],
+  ])("rejects non-string %s values", (_field, overrides, message) => {
+    expect(() => parseActionInputs(validRawInputs(overrides))).toThrow(message);
   });
 
   it("normalizes optional fields for comment-only inputs", () => {
@@ -123,25 +343,23 @@ describe("parseActionInputs", () => {
         mode: "comment-only",
         deployments: JSON.stringify([
           {
-            projectUrl: "http://vercel.com/team/web",
+            projectId: " prj_web ",
+            environment: " staging ",
+            projectUrl: "https://vercel.com/team/web",
             deploymentUrl: "https://web-git-feature-team.vercel.app",
             cwd: " apps/web ",
-            projectName: " web ",
+            orgId: " org_123 ",
+            displayName: " web ",
             teamId: " team_123 ",
             slug: " my-team ",
-            command: [
-              " pnpm ",
-              " deploy ",
-            ],
           },
           {
-            projectUrl: "https://vercel.com/team/admin",
-            deploymentUrl: "https://admin-git-feature-team.vercel.app",
+            ...validCommentOnlyDeployment,
+            displayName: " ",
             cwd: " ",
-            projectName: "",
+            orgId: "",
             teamId: null,
             slug: "",
-            command: " vercel deploy --prebuilt ",
           },
         ]),
         header: "Preview\nDeployments",
@@ -157,25 +375,54 @@ describe("parseActionInputs", () => {
     expect(inputs.status).toBe("failure");
     expect(inputs.commentOnFailure).toBe(false);
     expect(inputs.deployments[0]).toEqual({
-      command: [
-        "pnpm",
-        "deploy",
-      ],
-      cwd: "apps/web",
       deploymentUrl: "https://web-git-feature-team.vercel.app/",
-      projectName: "web",
-      projectUrl: "http://vercel.com/team/web",
+      displayName: "web",
+      environment: "staging",
+      projectId: "prj_web",
+      projectUrl: "https://vercel.com/team/web",
       teamId: "team_123",
       slug: "my-team",
     });
     expect(inputs.deployments[1]).toMatchObject({
-      command: "vercel deploy --prebuilt",
-      deploymentUrl: "https://admin-git-feature-team.vercel.app/",
-      projectName: undefined,
-      cwd: undefined,
+      deploymentUrl: "https://web-git-feature-team.vercel.app/",
+      displayName: undefined,
       teamId: undefined,
       slug: undefined,
     });
+  });
+
+  it.each([
+    [
+      "deploy-and-comment",
+      validRawInputs({
+        deployments: JSON.stringify([
+          validDeployAndCommentDeployment,
+          {
+            ...validDeployAndCommentDeployment,
+            cwd: "apps/admin",
+            deploymentUrl: "https://web-duplicate.vercel.app",
+            orgId: "team_456",
+          },
+        ]),
+      }),
+    ],
+    [
+      "comment-only",
+      validRawInputs({
+        mode: "comment-only",
+        deployments: JSON.stringify([
+          validCommentOnlyDeployment,
+          {
+            ...validCommentOnlyDeployment,
+            deploymentUrl: "https://web-duplicate.vercel.app",
+          },
+        ]),
+      }),
+    ],
+  ])("rejects duplicate deployment keys in %s mode", (_name, rawInputs) => {
+    expect(() => parseActionInputs(rawInputs)).toThrow(
+      'deployments[1] duplicates deployments[0] for projectId "prj_web" and environment "preview". Each (projectId, environment) pair must be unique.',
+    );
   });
 
   it.each([
@@ -190,7 +437,7 @@ describe("parseActionInputs", () => {
       "non-array deployments",
       {
         deployments: JSON.stringify({
-          projectUrl: "https://vercel.com/team/web",
+          ...validDeployAndCommentDeployment,
         }),
       },
       "deployments must be a non-empty JSON array",
@@ -216,7 +463,7 @@ describe("parseActionInputs", () => {
       {
         deployments: JSON.stringify([
           {
-            ...validDeployment,
+            ...validDeployAndCommentDeployment,
             cwd: 123,
           },
         ]),
@@ -226,9 +473,10 @@ describe("parseActionInputs", () => {
     [
       "non-string deployment URLs",
       {
+        mode: "comment-only",
         deployments: JSON.stringify([
           {
-            ...validDeployment,
+            ...validCommentOnlyDeployment,
             deploymentUrl: 123,
           },
         ]),
@@ -236,97 +484,90 @@ describe("parseActionInputs", () => {
       "deployments[0].deploymentUrl must be a URL string",
     ],
     [
-      "invalid deployment URL protocols",
+      "non-https deployment URL protocols",
       {
+        mode: "comment-only",
         deployments: JSON.stringify([
           {
-            ...validDeployment,
+            ...validCommentOnlyDeployment,
+            deploymentUrl: "http://example.com/preview",
+          },
+        ]),
+      },
+      "deployments[0].deploymentUrl must be a valid https URL",
+    ],
+    [
+      "invalid deployment URL protocols",
+      {
+        mode: "comment-only",
+        deployments: JSON.stringify([
+          {
+            ...validCommentOnlyDeployment,
             deploymentUrl: "ftp://example.com/preview",
           },
         ]),
       },
-      "deployments[0].deploymentUrl must be a valid http or https URL",
+      "deployments[0].deploymentUrl must be a valid https URL",
+    ],
+    [
+      "non-https project URL protocols",
+      {
+        deployments: JSON.stringify([
+          {
+            ...validDeployAndCommentDeployment,
+            projectUrl: "http://example.com/project",
+          },
+        ]),
+      },
+      "deployments[0].projectUrl must be a valid https URL",
     ],
     [
       "invalid project URL protocols",
       {
         deployments: JSON.stringify([
           {
-            ...validDeployment,
+            ...validDeployAndCommentDeployment,
             projectUrl: "ftp://example.com/project",
           },
         ]),
       },
-      "deployments[0].projectUrl must be a valid http or https URL",
+      "deployments[0].projectUrl must be a valid https URL",
     ],
     [
-      "invalid command types",
+      "missing projectId",
       {
         deployments: JSON.stringify([
           {
-            ...validDeployment,
-            command: 123,
+            ...validDeployAndCommentDeployment,
+            projectId: "",
           },
         ]),
       },
-      "deployments[0].command must be a string or string array",
+      "deployments[0].projectId is required",
     ],
     [
-      "empty command arrays",
+      "missing environment",
       {
         deployments: JSON.stringify([
           {
-            ...validDeployment,
-            command: [],
+            ...validDeployAndCommentDeployment,
+            environment: "",
           },
         ]),
       },
-      "deployments[0].command must not be an empty array",
+      "deployments[0].environment is required",
     ],
     [
-      "empty command array entries",
+      "invalid displayName",
       {
         deployments: JSON.stringify([
           {
-            ...validDeployment,
-            command: [
-              "pnpm",
-              "",
-            ],
+            ...validDeployAndCommentDeployment,
+            displayName: 123,
           },
         ]),
       },
-      "deployments[0].command[1] must be a non-empty string",
-    ],
-    [
-      "blank command array entries",
-      {
-        deployments: JSON.stringify([
-          {
-            ...validDeployment,
-            command: [
-              "pnpm",
-              "   ",
-            ],
-          },
-        ]),
-      },
-      "deployments[0].command[1] must be a non-empty string",
-    ],
-    [
-      "non-string command array entries",
-      {
-        deployments: JSON.stringify([
-          {
-            ...validDeployment,
-            command: [
-              "pnpm",
-              123,
-            ],
-          },
-        ]),
-      },
-      "deployments[0].command[1] must be a non-empty string",
+      "deployments[0].displayName must be a string",
     ],
     [
       "invalid modes",
@@ -401,12 +642,12 @@ describe("readActionInputs", () => {
       "github-token": "ghs_token",
       "vercel-token": "vercel_token",
       deployments: JSON.stringify([
-        validDeployment,
+        validDeployAndCommentDeployment,
       ]),
     };
 
     const inputs = readActionInputs({
-      getInput: (name, options) => {
+      getInput: (name: string, options?: unknown) => {
         requests.push({
           name,
           options,
@@ -446,10 +687,7 @@ describe("readActionInputs", () => {
         "INPUT_GITHUB-TOKEN": "ghs_token",
         INPUT_MODE: "comment-only",
         INPUT_DEPLOYMENTS: JSON.stringify([
-          {
-            ...validDeployment,
-            deploymentUrl: "https://web-git-feature-team.vercel.app",
-          },
+          validCommentOnlyDeployment,
         ]),
         INPUT_HEADER: "Core Preview",
         INPUT_FOOTER: "Core Footer",

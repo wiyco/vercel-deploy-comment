@@ -105,23 +105,13 @@ export class GitHubClient {
     const existingComment = await this.findExistingActionComment(hiddenMarker);
 
     if (existingComment) {
-      const updated = await this.request<IssueComment>(
-        `/repos/${this.#context.owner}/${this.#context.repo}/issues/comments/${existingComment.id}`,
-        {
-          method: "PATCH",
-          body: JSON.stringify({
-            body,
-          }),
-        },
-      );
-
-      return {
-        id: updated.id,
-        htmlUrl: updated.html_url,
-        action: "updated",
-      };
+      return this.updatePullRequestComment(existingComment.id, body);
     }
 
+    return this.createPullRequestComment(body);
+  }
+
+  async createPullRequestComment(body: string): Promise<UpsertCommentResult> {
     const created = await this.request<IssueComment>(
       `/repos/${this.#context.owner}/${this.#context.repo}/issues/${this.#context.issueNumber}/comments`,
       {
@@ -136,6 +126,27 @@ export class GitHubClient {
       id: created.id,
       htmlUrl: created.html_url,
       action: "created",
+    };
+  }
+
+  async updatePullRequestComment(
+    commentId: number,
+    body: string,
+  ): Promise<UpsertCommentResult> {
+    const updated = await this.request<IssueComment>(
+      `/repos/${this.#context.owner}/${this.#context.repo}/issues/comments/${commentId}`,
+      {
+        method: "PATCH",
+        body: JSON.stringify({
+          body,
+        }),
+      },
+    );
+
+    return {
+      id: updated.id,
+      htmlUrl: updated.html_url,
+      action: "updated",
     };
   }
 

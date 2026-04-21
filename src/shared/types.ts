@@ -12,29 +12,53 @@ export const MODES = [
 ] as const;
 export type ActionMode = (typeof MODES)[number];
 
-export type DeploymentCommand = string | string[];
-
-export interface DeploymentInput {
-  cwd?: string;
-  command?: DeploymentCommand;
-  deploymentUrl?: string;
-  projectName?: string;
+export interface BaseDeploymentInput {
+  displayName?: string;
+  environment: string;
+  projectId: string;
   projectUrl: string;
   teamId?: string;
   slug?: string;
 }
 
-export interface ActionInputs {
+export interface DeployAndCommentDeploymentInput extends BaseDeploymentInput {
+  cwd: string;
+  deploymentUrl?: string;
+  orgId: string;
+}
+
+export interface CommentOnlyDeploymentInput extends BaseDeploymentInput {
+  deploymentUrl: string;
+}
+
+export type DeploymentInput =
+  | DeployAndCommentDeploymentInput
+  | CommentOnlyDeploymentInput;
+
+export interface BaseActionInputs {
   githubToken: string;
-  vercelToken?: string;
-  mode: ActionMode;
-  deployments: DeploymentInput[];
   header: string;
   footer?: string;
   commentMarker: string;
   status: ActionStatus;
   commentOnFailure: boolean;
 }
+
+export interface DeployAndCommentActionInputs extends BaseActionInputs {
+  vercelToken: string;
+  mode: "deploy-and-comment";
+  deployments: DeployAndCommentDeploymentInput[];
+}
+
+export interface CommentOnlyActionInputs extends BaseActionInputs {
+  vercelToken?: string;
+  mode: "comment-only";
+  deployments: CommentOnlyDeploymentInput[];
+}
+
+export type ActionInputs =
+  | DeployAndCommentActionInputs
+  | CommentOnlyActionInputs;
 
 export interface DisplayStatus {
   key: string;
@@ -43,12 +67,19 @@ export interface DisplayStatus {
 }
 
 export interface DeploymentCommentRow {
+  environment: string;
+  projectId: string;
   projectName: string;
   projectUrl: string;
   previewUrl?: string;
   status: DisplayStatus;
   runUrl: string;
   updatedAtUtc: string;
+}
+
+export interface VercelProjectDetails {
+  id?: string;
+  name?: string;
 }
 
 export interface VercelDeploymentDetails {

@@ -411,7 +411,7 @@ describe("GitHubClient", () => {
         ...context,
         apiUrl: "https://api.github.test/",
       },
-      async (input) => {
+      async (input: string | URL) => {
         const url = input instanceof URL ? input : new URL(input);
         calls.push(url);
 
@@ -445,7 +445,7 @@ function responseQueue(
   }>,
   payloads: unknown[],
 ): FetchLike {
-  return async (input, init) => {
+  return async (input: string | URL, init?: RequestInit) => {
     const url = input instanceof URL ? input : new URL(input);
     calls.push({
       url,

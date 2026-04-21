@@ -13,6 +13,9 @@ import { StringDecoder } from "string_decoder";
 import * as child from "child_process";
 import { setTimeout as setTimeout$1 } from "timers";
 import { readFileSync } from "node:fs";
+import { cp, mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 //#region \0rolldown/runtime.js
 var __create = Object.create;
 var __defProp = Object.defineProperty;
@@ -16384,7 +16387,7 @@ var __awaiter$6 = function(thisArg, _arguments, P, generator) {
 		step((generator = generator.apply(thisArg, _arguments || [])).next());
 	});
 };
-const { access, appendFile, writeFile } = promises;
+const { access, appendFile, writeFile: writeFile$1 } = promises;
 const SUMMARY_ENV_VAR = "GITHUB_STEP_SUMMARY";
 var Summary = class {
 	constructor() {
@@ -16435,7 +16438,7 @@ var Summary = class {
 		return __awaiter$6(this, void 0, void 0, function* () {
 			const overwrite = !!(options === null || options === void 0 ? void 0 : options.overwrite);
 			const filePath = yield this.filePath();
-			yield (overwrite ? writeFile : appendFile)(filePath, this._buffer, { encoding: "utf8" });
+			yield (overwrite ? writeFile$1 : appendFile)(filePath, this._buffer, { encoding: "utf8" });
 			return this.emptyBuffer();
 		});
 	}
@@ -16705,7 +16708,7 @@ var __awaiter$5 = function(thisArg, _arguments, P, generator) {
 		step((generator = generator.apply(thisArg, _arguments || [])).next());
 	});
 };
-const { chmod, copyFile, lstat, mkdir, open, readdir, rename, rm, rmdir, stat, symlink, unlink } = fs.promises;
+const { chmod, copyFile, lstat, mkdir: mkdir$1, open, readdir: readdir$1, rename, rm: rm$1, rmdir, stat, symlink, unlink } = fs.promises;
 const IS_WINDOWS$1 = process.platform === "win32";
 fs.constants.O_RDONLY;
 function exists(fsPath) {
@@ -16763,7 +16766,7 @@ function tryGetExecutablePath(filePath, extensions) {
 					try {
 						const directory = path.dirname(filePath);
 						const upperName = path.basename(filePath).toUpperCase();
-						for (const actualName of yield readdir(directory)) if (upperName === actualName.toUpperCase()) {
+						for (const actualName of yield readdir$1(directory)) if (upperName === actualName.toUpperCase()) {
 							filePath = path.join(directory, actualName);
 							break;
 						}
@@ -17709,6 +17712,11 @@ function getIDToken(aud) {
 	});
 }
 //#endregion
+//#region src/shared/deployment-key.ts
+function buildDeploymentRowKey(projectId, environment) {
+	return `${projectId}\u0000${environment}`;
+}
+//#endregion
 //#region src/shared/types.ts
 const ACTION_STATUSES = [
 	"success",
@@ -17740,31 +17748,35 @@ function readActionInputs(reader = core_exports) {
 }
 function parseActionInputs(raw) {
 	const githubToken = requireNonEmpty(raw.githubToken, "github-token");
-	const vercelToken = optionalNonEmpty(raw.vercelToken);
+	const vercelToken = optionalString(raw.vercelToken, "vercel-token");
 	const mode = parseEnum(raw.mode, MODES, "mode");
 	const status = parseEnum(raw.status, ACTION_STATUSES, "status");
-	const deployments = parseDeployments(raw.deployments);
 	const commentMarker = parseCommentMarker(raw.commentMarker);
-	const header = requireNonEmpty(raw.header, "header").replace(/\r?\n/g, " ");
-	const footer = optionalNonEmpty(raw.footer);
-	const commentOnFailure = parseBoolean(raw.commentOnFailure, "comment-on-failure");
-	if (mode === "deploy-and-comment" && !vercelToken) throw new InputError("vercel-token is required when mode is deploy-and-comment.");
-	if (mode === "comment-only") {
-		for (const [index, deployment] of deployments.entries()) if (!deployment.deploymentUrl) throw new InputError(`deployments[${index}].deploymentUrl is required when mode is comment-only.`);
-	}
-	return {
+	const commonInputs = {
 		githubToken,
-		vercelToken,
-		mode,
-		deployments,
-		header,
-		footer,
+		header: requireNonEmpty(raw.header, "header").replace(/\r?\n/g, " "),
+		footer: optionalString(raw.footer, "footer"),
 		commentMarker,
 		status,
-		commentOnFailure
+		commentOnFailure: parseBoolean(raw.commentOnFailure, "comment-on-failure")
+	};
+	if (mode === "deploy-and-comment") {
+		if (!vercelToken) throw new InputError("vercel-token is required when mode is deploy-and-comment.");
+		return {
+			...commonInputs,
+			vercelToken,
+			mode,
+			deployments: parseDeployments(raw.deployments, mode)
+		};
+	}
+	return {
+		...commonInputs,
+		vercelToken,
+		mode,
+		deployments: parseDeployments(raw.deployments, mode)
 	};
 }
-function parseDeployments(rawDeployments) {
+function parseDeployments(rawDeployments, mode) {
 	const raw = requireNonEmpty(rawDeployments, "deployments");
 	let parsed;
 	try {
@@ -17773,41 +17785,57 @@ function parseDeployments(rawDeployments) {
 		throw new InputError(`deployments must be valid JSON: ${formatCause(error)}`);
 	}
 	if (!Array.isArray(parsed) || parsed.length === 0) throw new InputError("deployments must be a non-empty JSON array.");
-	return parsed.map((item, index) => parseDeploymentInput(item, index));
+	if (mode === "deploy-and-comment") {
+		const deployments = parsed.map((item, index) => parseDeployAndCommentDeploymentInput(item, index));
+		assertUniqueDeploymentKeys(deployments);
+		return deployments;
+	}
+	const deployments = parsed.map((item, index) => parseCommentOnlyDeploymentInput(item, index));
+	assertUniqueDeploymentKeys(deployments);
+	return deployments;
 }
-function parseDeploymentInput(item, index) {
-	if (!isRecord(item)) throw new InputError(`deployments[${index}] must be an object.`);
-	const projectUrl = requireHttpUrl(item.projectUrl, `deployments[${index}].projectUrl`);
-	const cwd = optionalString(item.cwd, `deployments[${index}].cwd`);
-	const projectName = optionalString(item.projectName, `deployments[${index}].projectName`);
-	const teamId = optionalString(item.teamId, `deployments[${index}].teamId`);
-	const slug = optionalString(item.slug, `deployments[${index}].slug`);
-	const deploymentUrl = optionalHttpUrl(item.deploymentUrl, `deployments[${index}].deploymentUrl`);
+function assertUniqueDeploymentKeys(deployments) {
+	const seen = /* @__PURE__ */ new Map();
+	deployments.forEach((deployment, index) => {
+		const key = buildDeploymentRowKey(deployment.projectId, deployment.environment);
+		const firstIndex = seen.get(key);
+		if (firstIndex !== void 0) throw new InputError(`deployments[${index}] duplicates deployments[${firstIndex}] for projectId "${deployment.projectId}" and environment "${deployment.environment}". Each (projectId, environment) pair must be unique.`);
+		seen.set(key, index);
+	});
+}
+function parseDeploymentBase(item, index) {
+	rejectDeprecatedField(item, index, "command");
+	rejectDeprecatedField(item, index, "projectName");
+	const projectId = requireNonEmpty(item.projectId, `deployments[${index}].projectId`);
+	const environment = requireNonEmpty(item.environment, `deployments[${index}].environment`);
+	const projectUrl = requireHttpsUrl(item.projectUrl, `deployments[${index}].projectUrl`);
 	return {
-		cwd,
-		command: parseOptionalCommand(item.command, `deployments[${index}].command`),
-		deploymentUrl,
-		projectName,
+		displayName: optionalString(item.displayName, `deployments[${index}].displayName`),
+		environment,
+		projectId,
 		projectUrl,
-		teamId,
-		slug
+		teamId: optionalString(item.teamId, `deployments[${index}].teamId`),
+		slug: optionalString(item.slug, `deployments[${index}].slug`)
 	};
 }
-function parseOptionalCommand(value, field) {
-	if (value === void 0 || value === null || value === "") return;
-	if (typeof value === "string") return requireNonEmpty(value, field);
-	if (Array.isArray(value)) {
-		if (value.length === 0) throw new InputError(`${field} must not be an empty array.`);
-		return value.map((entry, index) => {
-			const trimmed = typeof entry === "string" ? entry.trim() : void 0;
-			if (!trimmed) throw new InputError(`${field}[${index}] must be a non-empty string.`);
-			return trimmed;
-		});
-	}
-	throw new InputError(`${field} must be a string or string array.`);
+function parseDeployAndCommentDeploymentInput(item, index) {
+	const record = requireRecord(item, `deployments[${index}]`);
+	return {
+		...parseDeploymentBase(record, index),
+		cwd: requireNonEmpty(record.cwd, `deployments[${index}].cwd`),
+		deploymentUrl: optionalHttpsUrl(record.deploymentUrl, `deployments[${index}].deploymentUrl`),
+		orgId: requireNonEmpty(record.orgId, `deployments[${index}].orgId`)
+	};
+}
+function parseCommentOnlyDeploymentInput(item, index) {
+	const record = requireRecord(item, `deployments[${index}]`);
+	return {
+		...parseDeploymentBase(record, index),
+		deploymentUrl: requireHttpsUrl(record.deploymentUrl, `deployments[${index}].deploymentUrl`)
+	};
 }
 function parseBoolean(value, field) {
-	const normalized = value.trim().toLowerCase();
+	const normalized = requireString(value, field).trim().toLowerCase();
 	if (normalized === "true") return true;
 	if (normalized === "false") return false;
 	throw new InputError(`${field} must be true or false.`);
@@ -17818,75 +17846,240 @@ function parseCommentMarker(value) {
 	return marker;
 }
 function parseEnum(value, values, field) {
-	const normalized = value.trim();
-	if (values.includes(normalized)) return normalized;
+	const normalized = requireString(value, field).trim();
+	const enumValue = values.find((candidate) => candidate === normalized);
+	if (enumValue !== void 0) return enumValue;
 	throw new InputError(`${field} must be one of: ${values.join(", ")}.`);
 }
 function requireNonEmpty(value, field) {
-	if (typeof value !== "string" || value.trim().length === 0) throw new InputError(`${field} is required.`);
-	return value.trim();
-}
-function optionalNonEmpty(value) {
-	if (typeof value !== "string") return;
-	const trimmed = value.trim();
-	return trimmed.length > 0 ? trimmed : void 0;
+	if (value === void 0 || value === null) throw new InputError(`${field} is required.`);
+	const trimmed = requireString(value, field).trim();
+	if (trimmed.length === 0) throw new InputError(`${field} is required.`);
+	return trimmed;
 }
 function optionalString(value, field) {
 	if (value === void 0 || value === null || value === "") return;
-	if (typeof value !== "string") throw new InputError(`${field} must be a string.`);
-	const trimmed = value.trim();
+	const trimmed = requireString(value, field).trim();
 	return trimmed.length > 0 ? trimmed : void 0;
 }
-function optionalHttpUrl(value, field) {
+function optionalHttpsUrl(value, field) {
 	if (value === void 0 || value === null || value === "") return;
 	if (typeof value !== "string") throw new InputError(`${field} must be a URL string.`);
-	return requireHttpUrl(value, field);
+	return requireHttpsUrl(value, field);
 }
-function requireHttpUrl(value, field) {
+function requireHttpsUrl(value, field) {
+	if (value === void 0 || value === null || value === "") throw new InputError(`${field} is required.`);
+	if (typeof value !== "string") throw new InputError(`${field} must be a URL string.`);
 	const raw = requireNonEmpty(value, field);
 	try {
 		const url = new URL(raw);
-		if (url.protocol !== "https:" && url.protocol !== "http:") throw new Error("URL must use http or https.");
+		if (url.protocol !== "https:") throw new Error("URL must use https.");
 		return url.toString();
 	} catch (error) {
-		throw new InputError(`${field} must be a valid http or https URL: ${formatCause(error)}`);
+		throw new InputError(`${field} must be a valid https URL: ${formatCause(error)}`);
 	}
 }
 function isRecord(value) {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
+function requireRecord(value, field) {
+	if (!isRecord(value)) throw new InputError(`${field} must be an object.`);
+	return value;
+}
+function rejectDeprecatedField(value, index, field) {
+	if (Object.hasOwn(value, field)) throw new InputError(`deployments[${index}].${field} is no longer supported.`);
+}
 function formatCause(error) {
 	return error instanceof Error ? error.message : "unknown error";
 }
+function requireString(value, field) {
+	if (typeof value !== "string") throw new InputError(`${field} must be a string.`);
+	return value;
+}
 //#endregion
 //#region src/comment/markdown.ts
+const STANDARD_ENVIRONMENTS = new Set([
+	"preview",
+	"production",
+	"development"
+]);
+const HTTPS_PROTOCOL = "https:";
+const HTTP_PROTOCOL = "http:";
+const HTTPS_ONLY_PROTOCOLS = [HTTPS_PROTOCOL];
+const HTTP_AND_HTTPS_PROTOCOLS = [HTTPS_PROTOCOL, HTTP_PROTOCOL];
+const ROW_MARKER_PATTERN = /<!--\s*vercel-deploy-comment:row:[^\r\n]*?-->/;
 function buildCommentMarker(marker) {
 	return `<!-- vercel-deploy-comment:${marker} -->`;
 }
+function buildRowMarker(projectId, environment) {
+	return `<!-- vercel-deploy-comment:row:${encodeURIComponent(projectId)}:${encodeURIComponent(environment)} -->`;
+}
 function renderDeploymentComment(options) {
+	const includeEnvironment = hasCustomEnvironment(options.rows);
 	const lines = [
 		`## ${escapeHeading(options.header)}`,
 		"",
-		"| Project | Deployment | Preview | Updated (UTC) |",
-		"| :--- | :----- | :------ | :------ |",
-		...options.rows.map(renderRow)
+		renderTableHeader(includeEnvironment),
+		renderTableSeparator(includeEnvironment),
+		...options.rows.map((row) => renderRow(row, includeEnvironment))
 	];
 	const footer = options.footer?.trim();
 	if (footer) lines.push("", footer);
 	lines.push("", buildCommentMarker(options.marker));
 	return `${lines.join("\n")}\n`;
 }
-function renderRow(row) {
-	return `| ${markdownLink(row.projectName, row.projectUrl)} | ${`${row.status.emoji} ${markdownLink(row.status.label, row.runUrl)}`} | ${row.previewUrl ? markdownLink("Preview", row.previewUrl) : "Unavailable"} | ${escapeTableCell(formatUtcTimestamp(row.updatedAtUtc))} |`;
+function parseDeploymentCommentRows(body) {
+	const rows = [];
+	for (const line of body.split(/\r?\n/)) {
+		const parsed = parseDeploymentCommentRow(line);
+		if (parsed) rows.push(parsed);
+	}
+	return rows;
+}
+function upsertDeploymentCommentRows(existingRows, nextRows, inputOrder) {
+	const orderedInputKeys = uniqueStrings(inputOrder);
+	const inputKeySet = new Set(orderedInputKeys);
+	const nextByKey = new Map(nextRows.map((row) => [buildDeploymentRowKey(row.projectId, row.environment), row]));
+	const mergedRows = [];
+	for (const key of orderedInputKeys) {
+		const row = nextByKey.get(key);
+		if (row) mergedRows.push(row);
+	}
+	for (const row of existingRows) {
+		const key = buildDeploymentRowKey(row.projectId, row.environment);
+		if (!inputKeySet.has(key)) mergedRows.push(row);
+	}
+	return mergedRows;
+}
+function renderTableHeader(includeEnvironment) {
+	if (includeEnvironment) return "| Project | Environment | Status | Preview | Updated (UTC) |";
+	return "| Project | Status | Preview | Updated (UTC) |";
+}
+function renderTableSeparator(includeEnvironment) {
+	if (includeEnvironment) return "| :--- | :--- | :--- | :--- | :--- |";
+	return "| :--- | :--- | :--- | :--- |";
+}
+function renderRow(row, includeEnvironment) {
+	const project = `${buildRowMarker(row.projectId, row.environment)} ${markdownHttpsLink(row.projectName, row.projectUrl)}`;
+	const status = `${row.status.emoji} ${markdownLink(row.status.label, row.runUrl)}`;
+	const preview = row.previewUrl ? markdownHttpsLink("Preview", row.previewUrl) : "Unavailable";
+	const updatedAt = formatUtcTimestamp(row.updatedAtUtc);
+	if (includeEnvironment) return `| ${project} | ${escapeTableCell(row.environment)} | ${status} | ${preview} | ${escapeTableCell(updatedAt)} |`;
+	return `| ${project} | ${status} | ${preview} | ${escapeTableCell(updatedAt)} |`;
+}
+function parseDeploymentCommentRow(line) {
+	const rowMarker = line.match(ROW_MARKER_PATTERN)?.[0];
+	if (!rowMarker) return;
+	const rowIdentity = parseRowMarker(rowMarker);
+	if (!rowIdentity) return;
+	const cells = splitTableCells(line);
+	if (cells.length !== 4 && cells.length !== 5) return;
+	const projectCell = cells[0];
+	const statusCell = cells.length === 4 ? cells[1] : cells[2];
+	const previewCell = cells.length === 4 ? cells[2] : cells[3];
+	const updatedAtUtc = cells.length === 4 ? cells[3] : cells[4];
+	if (!projectCell || !statusCell || !previewCell || !updatedAtUtc) return;
+	const projectLink = parseMarkdownLink(projectCell.replace(rowMarker, "").trim(), HTTPS_ONLY_PROTOCOLS);
+	const statusDetails = parseStatusCell(statusCell);
+	if (!projectLink || !statusDetails) return;
+	const previewLink = previewCell === "Unavailable" ? void 0 : parseMarkdownLink(previewCell, HTTPS_ONLY_PROTOCOLS);
+	return {
+		environment: rowIdentity.environment,
+		projectId: rowIdentity.projectId,
+		projectName: projectLink.label,
+		projectUrl: projectLink.url,
+		previewUrl: previewLink?.url,
+		runUrl: statusDetails.runUrl,
+		status: statusDetails.status,
+		updatedAtUtc: unescapeTableCell(updatedAtUtc)
+	};
+}
+function parseRowMarker(marker) {
+	const payload = marker.trim().replace(/^<!--\s*vercel-deploy-comment:row:/, "").replace(/\s*-->$/, "");
+	const separatorIndex = payload.indexOf(":");
+	if (separatorIndex <= 0 || separatorIndex >= payload.length - 1) return;
+	try {
+		return {
+			projectId: decodeURIComponent(payload.slice(0, separatorIndex)),
+			environment: decodeURIComponent(payload.slice(separatorIndex + 1))
+		};
+	} catch {
+		return;
+	}
+}
+function parseStatusCell(cell) {
+	const linkStart = cell.indexOf("[");
+	if (linkStart <= 0) return;
+	const emoji = cell.slice(0, linkStart).trim();
+	const link = parseMarkdownLink(cell.slice(linkStart).trim(), HTTP_AND_HTTPS_PROTOCOLS);
+	if (!emoji || !link) return;
+	return {
+		runUrl: link.url,
+		status: {
+			key: labelToStatusKey(link.label),
+			emoji,
+			label: link.label
+		}
+	};
+}
+function parseMarkdownLink(cell, allowedProtocols = HTTP_AND_HTTPS_PROTOCOLS) {
+	const match = cell.match(/^\[(.*)\]\((https?:\/\/.+)\)$/);
+	if (!match) return;
+	const label = match[1];
+	const url = match[2];
+	if (!label || !url) return;
+	try {
+		const parsedUrl = new URL(url);
+		if (!allowedProtocols.includes(parsedUrl.protocol)) return;
+		return {
+			label: unescapeLinkLabel(label),
+			url: parsedUrl.toString()
+		};
+	} catch {
+		return;
+	}
+}
+function splitTableCells(line) {
+	const trimmed = line.trim();
+	if (!trimmed.startsWith("|") || !trimmed.endsWith("|")) return [];
+	const cells = [];
+	let current = "";
+	for (let index = 1; index < trimmed.length - 1; index += 1) {
+		const char = trimmed[index];
+		const previous = trimmed[index - 1];
+		if (char === "|" && previous !== "\\") {
+			cells.push(current.trim());
+			current = "";
+			continue;
+		}
+		current += char;
+	}
+	cells.push(current.trim());
+	return cells;
+}
+function hasCustomEnvironment(rows) {
+	return rows.some((row) => isCustomEnvironment(row.environment));
+}
+function isCustomEnvironment(environment) {
+	return !STANDARD_ENVIRONMENTS.has(environment.trim().toLowerCase());
 }
 function markdownLink(label, url) {
-	return `[${escapeLinkLabel(label)}](${escapeMarkdownUrl(url)})`;
+	return markdownLinkWithProtocols(label, url, HTTP_AND_HTTPS_PROTOCOLS);
+}
+function markdownHttpsLink(label, url) {
+	return markdownLinkWithProtocols(label, url, HTTPS_ONLY_PROTOCOLS);
+}
+function markdownLinkWithProtocols(label, url, allowedProtocols) {
+	return `[${escapeLinkLabel(label)}](${escapeMarkdownUrl(url, allowedProtocols)})`;
 }
 function escapeHeading(value) {
 	return value.replace(/\r?\n/g, " ").trim();
 }
 function escapeTableCell(value) {
 	return value.replace(/\r?\n/g, " ").replaceAll("|", "\\|").trim();
+}
+function unescapeTableCell(value) {
+	return value.replaceAll("\\|", "|").trim();
 }
 function formatUtcTimestamp(value) {
 	const date = new Date(value);
@@ -17899,10 +18092,37 @@ function padUtcPart(value) {
 function escapeLinkLabel(value) {
 	return value.replace(/\r?\n/g, " ").replaceAll("\\", "\\\\").replaceAll("[", "\\[").replaceAll("]", "\\]").replaceAll("|", "\\|").trim();
 }
-function escapeMarkdownUrl(value) {
+function unescapeLinkLabel(value) {
+	return value.replace(/\\([\\[\]|])/g, "$1").trim();
+}
+function escapeMarkdownUrl(value, allowedProtocols = HTTP_AND_HTTPS_PROTOCOLS) {
 	const url = new URL(value);
-	if (url.protocol !== "https:" && url.protocol !== "http:") throw new Error("Markdown links only support http and https URLs.");
+	if (!allowedProtocols.includes(url.protocol)) throw new Error(markdownUrlProtocolError(allowedProtocols));
 	return url.toString().replaceAll("(", "%28").replaceAll(")", "%29");
+}
+function markdownUrlProtocolError(allowedProtocols) {
+	if (allowedProtocols.length === 1 && allowedProtocols[0] === HTTPS_PROTOCOL) return "Markdown links only support https URLs.";
+	return "Markdown links only support http and https URLs.";
+}
+function labelToStatusKey(label) {
+	switch (label.trim().toLowerCase()) {
+		case "ready": return "ready";
+		case "failed": return "failed";
+		case "cancelled": return "cancelled";
+		case "skipped": return "skipped";
+		case "in progress": return "in_progress";
+		case "unknown": return "unknown";
+		default: return label.trim().toLowerCase().replace(/\s+/g, "_");
+	}
+}
+function uniqueStrings(values) {
+	const seen = /* @__PURE__ */ new Set();
+	const unique = [];
+	for (const value of values) if (!seen.has(value)) {
+		seen.add(value);
+		unique.push(value);
+	}
+	return unique;
 }
 //#endregion
 //#region src/comment/status.ts
@@ -17997,17 +18217,10 @@ var GitHubClient = class {
 	}
 	async upsertPullRequestComment(body, hiddenMarker) {
 		const existingComment = await this.findExistingActionComment(hiddenMarker);
-		if (existingComment) {
-			const updated = await this.request(`/repos/${this.#context.owner}/${this.#context.repo}/issues/comments/${existingComment.id}`, {
-				method: "PATCH",
-				body: JSON.stringify({ body })
-			});
-			return {
-				id: updated.id,
-				htmlUrl: updated.html_url,
-				action: "updated"
-			};
-		}
+		if (existingComment) return this.updatePullRequestComment(existingComment.id, body);
+		return this.createPullRequestComment(body);
+	}
+	async createPullRequestComment(body) {
 		const created = await this.request(`/repos/${this.#context.owner}/${this.#context.repo}/issues/${this.#context.issueNumber}/comments`, {
 			method: "POST",
 			body: JSON.stringify({ body })
@@ -18016,6 +18229,17 @@ var GitHubClient = class {
 			id: created.id,
 			htmlUrl: created.html_url,
 			action: "created"
+		};
+	}
+	async updatePullRequestComment(commentId, body) {
+		const updated = await this.request(`/repos/${this.#context.owner}/${this.#context.repo}/issues/comments/${commentId}`, {
+			method: "PATCH",
+			body: JSON.stringify({ body })
+		});
+		return {
+			id: updated.id,
+			htmlUrl: updated.html_url,
+			action: "updated"
 		};
 	}
 	async findExistingActionComment(hiddenMarker) {
@@ -18076,129 +18300,146 @@ function stripLeadingSlash(value) {
 }
 //#endregion
 //#region src/vercel/deployment.ts
-const DEFAULT_COMMAND = [
-	"vercel",
-	"deploy",
-	"--prebuilt"
-];
+const VERCEL_BINARY = "vercel";
+const EXCLUDED_WORKSPACE_ENTRY_NAMES = new Set([".git", ".vercel"]);
+const ACTION_INPUT_ENV_PREFIX = "INPUT_";
 var VercelDeployError = class extends Error {
-	constructor(message, exitCode, deploymentUrl) {
+	constructor(message, step, exitCode, deploymentUrl) {
 		super(message);
+		this.step = step;
 		this.exitCode = exitCode;
 		this.deploymentUrl = deploymentUrl;
 		this.name = "VercelDeployError";
 	}
 };
 async function runVercelDeploy(options) {
-	const [tool, ...args] = appendVercelToken(parseCommand(options.deployment.command ?? [...DEFAULT_COMMAND]), options.token);
+	const sourceDirectory = resolve(options.deployment.cwd);
+	const tempWorkspace = await mkdtemp(join(tmpdir(), "vercel-deploy-comment-"));
+	try {
+		await copyWorkspace(sourceDirectory, tempWorkspace);
+		await writeProjectSettings(tempWorkspace, options.deployment.projectId, options.deployment.orgId);
+		await runVercelStep({
+			exec: options.exec,
+			cwd: tempWorkspace,
+			step: "pull",
+			passToken: true,
+			token: options.token,
+			args: [
+				"pull",
+				"--yes",
+				"--environment",
+				options.deployment.environment
+			]
+		});
+		await runVercelStep({
+			exec: options.exec,
+			cwd: tempWorkspace,
+			step: "build",
+			token: options.token,
+			args: ["build", "--yes"]
+		});
+		const deploymentUrl = extractDeploymentUrl(await runVercelStep({
+			exec: options.exec,
+			cwd: tempWorkspace,
+			step: "deploy",
+			passToken: true,
+			token: options.token,
+			args: ["deploy", "--prebuilt"],
+			captureStdout: true
+		}));
+		if (!deploymentUrl) throw new VercelDeployError("Vercel deploy did not print a deployment URL to stdout.", "deploy");
+		return deploymentUrl;
+	} finally {
+		await rm(tempWorkspace, {
+			recursive: true,
+			force: true
+		});
+	}
+}
+/**
+* `vercel pull`, `vercel build`, and `vercel deploy --prebuilt` run inside an
+* isolated temp workspace rather than the repository checkout.
+*
+* The exclude list intentionally stays narrow. Heavy top-level directories
+* such as `node_modules` may be copied when `cwd` points at the repo root,
+* which can increase temp workspace size and deployment latency. We do not
+* exclude those entries by default because `vercel build` runs inside the
+* copied workspace, and changing the default copy set can change build
+* behavior for projects that expect the full workspace contents under `cwd`.
+*
+* See:
+* * `README.md` Usage / deploy-and-comment steps
+* * `docs/spec.md` Runtime Design > Deploy Execution
+* * https://vercel.com/docs/cli/build
+* * https://vercel.com/docs/deployments/configure-a-build
+*/
+async function copyWorkspace(sourceDirectory, destinationDirectory) {
+	const entries = await readdir(sourceDirectory, { withFileTypes: true });
+	for (const entry of entries) {
+		if (EXCLUDED_WORKSPACE_ENTRY_NAMES.has(entry.name)) continue;
+		await cp(join(sourceDirectory, entry.name), join(destinationDirectory, entry.name), { recursive: true });
+	}
+}
+async function writeProjectSettings(workspaceDirectory, projectId, orgId) {
+	const vercelDirectory = join(workspaceDirectory, ".vercel");
+	const projectFile = join(vercelDirectory, "project.json");
+	await mkdir(vercelDirectory, { recursive: true });
+	await writeFile(projectFile, `${JSON.stringify({
+		projectId,
+		orgId
+	}, null, 2)}\n`, "utf8");
+}
+async function runVercelStep(options) {
 	let stdout = "";
-	const exitCode = await options.exec(tool, args, {
-		cwd: options.deployment.cwd,
+	const exitCode = await options.exec(VERCEL_BINARY, options.args, {
+		cwd: options.cwd,
+		env: buildVercelEnvironment(options.passToken ? options.token : void 0),
 		ignoreReturnCode: true,
-		listeners: { stdout: (data) => {
+		listeners: options.captureStdout ? { stdout: (data) => {
 			stdout += data.toString("utf8");
-		} }
+		} } : void 0
 	});
-	const deploymentUrl = extractDeploymentUrl(stdout);
-	if (exitCode !== 0) throw new VercelDeployError(`Vercel deploy failed with exit code ${exitCode}.`, exitCode, deploymentUrl);
-	if (!deploymentUrl) throw new VercelDeployError("Vercel deploy did not print a deployment URL to stdout.");
-	return deploymentUrl;
+	if (exitCode !== 0) throw new VercelDeployError(`Vercel ${options.step} failed with exit code ${exitCode}.`, options.step, exitCode, options.step === "deploy" ? extractDeploymentUrl(stdout) : void 0);
+	return stdout;
 }
-function parseCommand(command) {
-	if (Array.isArray(command)) {
-		const parts = Array.from(command);
-		if (parts.length === 0 || parts.some((part) => typeof part !== "string" || part.trim().length === 0)) throw new VercelDeployError("Deploy command array must contain non-empty strings.");
-		return parts;
-	}
-	const argv = [];
-	let current = "";
-	let quote;
-	const chars = [...command];
-	let skipNext = false;
-	for (const [index, char] of chars.entries()) {
-		if (skipNext) {
-			skipNext = false;
-			continue;
-		}
-		const next = chars[index + 1];
-		if (char === "\\" && next !== void 0 && isEscapableCommandChar(next, quote)) {
-			current += next;
-			skipNext = true;
-			continue;
-		}
-		if ((char === "'" || char === "\"") && !quote) {
-			quote = char;
-			continue;
-		}
-		if (char === quote) {
-			quote = void 0;
-			continue;
-		}
-		if (/\s/.test(char) && !quote) {
-			if (current.length > 0) {
-				argv.push(current);
-				current = "";
-			}
-			continue;
-		}
-		current += char;
-	}
-	if (quote) throw new VercelDeployError("Deploy command contains an unterminated quote.");
-	if (current.length > 0) argv.push(current);
-	if (argv.length === 0) throw new VercelDeployError("Deploy command is empty.");
-	return argv;
-}
-function isEscapableCommandChar(char, quote) {
-	if (quote === "'") return false;
-	if (quote === "\"") return char === "\"";
-	return char === "'" || char === "\"" || /\s/.test(char);
+function buildVercelEnvironment(token) {
+	const env = Object.assign({}, process.env);
+	for (const key of Object.keys(env)) if (key.startsWith(ACTION_INPUT_ENV_PREFIX)) delete env[key];
+	delete env.VERCEL_TOKEN;
+	if (token) env.VERCEL_TOKEN = token;
+	return env;
 }
 function extractDeploymentUrl(stdout) {
 	const lastMatch = stdout.match(/https?:\/\/[^\s<>"']+/g)?.at(-1);
 	if (!lastMatch) return;
 	return lastMatch.replace(/[),.;]+$/g, "");
 }
+async function getVercelProjectDetails(options) {
+	return requestVercelApi(buildVercelApiUrl(`/v9/projects/${encodeURIComponent(options.projectId)}`, options), options.token, options.fetch);
+}
 async function getVercelDeploymentDetails(options) {
 	const idOrUrl = deploymentUrlToIdOrHost(options.deploymentUrl);
-	const apiUrl = new URL(`https://api.vercel.com/v13/deployments/${encodeURIComponent(idOrUrl)}`);
+	const apiUrl = buildVercelApiUrl(`/v13/deployments/${encodeURIComponent(idOrUrl)}`, options);
 	apiUrl.searchParams.set("withGitRepoInfo", "true");
-	if (options.teamId) apiUrl.searchParams.set("teamId", options.teamId);
-	if (options.slug) apiUrl.searchParams.set("slug", options.slug);
-	const response = await options.fetch(apiUrl, { headers: {
-		Authorization: `Bearer ${options.token}`,
-		"User-Agent": "vercel-deploy-comment"
-	} });
-	if (!response.ok) throw new Error(`Vercel API request failed with status ${response.status} ${response.statusText}.`);
-	return await response.json();
+	return requestVercelApi(apiUrl, options.token, options.fetch);
 }
 function toHttpUrl(value) {
 	if (/^https?:\/\//i.test(value)) return new URL(value).toString();
 	return new URL(`https://${value}`).toString();
 }
-function appendVercelToken(argv, token) {
-	if (!isVercelInvocation(argv) || hasTokenArgument(argv)) return argv;
-	return [...argv, `--token=${token}`];
+function buildVercelApiUrl(pathname, searchParams = {}) {
+	const apiUrl = new URL(pathname, "https://api.vercel.com");
+	if (searchParams.teamId) apiUrl.searchParams.set("teamId", searchParams.teamId);
+	if (searchParams.slug) apiUrl.searchParams.set("slug", searchParams.slug);
+	return apiUrl;
 }
-function isVercelInvocation(argv) {
-	const [tool, firstArg, secondArg] = argv;
-	return isVercelBinary(tool) || isVercelBinary(firstArg) || isPackageRunnerVercelInvocation(tool, firstArg, secondArg);
-}
-function isVercelBinary(value) {
-	if (!value) return false;
-	return /(^|[/\\])vercel(\.cmd)?$/i.test(value);
-}
-function isPackageRunnerVercelInvocation(tool, firstArg, secondArg) {
-	if (!tool || !firstArg || !secondArg) return false;
-	const runner = getBinaryName(tool);
-	const subcommand = firstArg.toLowerCase();
-	if (runner === "pnpm" && (subcommand === "exec" || subcommand === "dlx")) return isVercelBinary(secondArg);
-	return runner === "npm" && subcommand === "exec" && isVercelBinary(secondArg);
-}
-function getBinaryName(value) {
-	return value.replace(/^.*[/\\]/, "").replace(/\.cmd$/i, "").toLowerCase();
-}
-function hasTokenArgument(argv) {
-	return argv.some((arg) => arg === "--token" || arg.startsWith("--token="));
+async function requestVercelApi(url, token, fetchImplementation) {
+	const response = await fetchImplementation(url, { headers: {
+		Authorization: `Bearer ${token}`,
+		"User-Agent": "vercel-deploy-comment"
+	} });
+	if (!response.ok) throw new Error(`Vercel API request failed with status ${response.status} ${response.statusText}.`);
+	return await response.json();
 }
 function deploymentUrlToIdOrHost(value) {
 	return new URL(value).hostname;
@@ -18207,82 +18448,54 @@ function deploymentUrlToIdOrHost(value) {
 //#region src/main.ts
 async function run() {
 	const inputs = readActionInputs();
-	setSecret(inputs.githubToken);
-	if (inputs.vercelToken) setSecret(inputs.vercelToken);
-	const context = readGitHubRuntimeContext();
-	const runUrl = buildRunUrl(context);
-	const updatedAtUtc = (/* @__PURE__ */ new Date()).toISOString();
-	const rows = [];
-	const deploymentUrls = [];
-	const statusKeys = [];
-	let deployFailure;
-	for (const deployment of inputs.deployments) {
-		let deploymentUrl = deployment.deploymentUrl;
-		let details;
-		let deploymentFailed = false;
-		if (inputs.mode === "deploy-and-comment") try {
-			deploymentUrl = await runVercelDeploy({
-				deployment,
-				token: inputs.vercelToken ?? "",
-				exec
-			});
-		} catch (error) {
-			deploymentFailed = true;
-			deployFailure = toError(error);
-			deploymentUrl = getDeploymentUrlFromError(error) ?? deploymentUrl;
-			warning(sanitizeErrorMessage(error, inputs));
-			if (!inputs.commentOnFailure) throw error;
-		}
-		if (deploymentUrl && inputs.vercelToken) try {
-			details = await getVercelDeploymentDetails({
-				deploymentUrl,
-				token: inputs.vercelToken,
-				teamId: deployment.teamId,
-				slug: deployment.slug,
-				fetch
-			});
-		} catch (error) {
-			warning(sanitizeErrorMessage(error, inputs));
-		}
-		const previewUrl = getPreviewUrl(deploymentUrl, details);
-		const status = resolveDisplayStatus({
-			vercelReadyState: details?.readyState,
-			actionStatus: deploymentFailed ? "failure" : inputs.status
+	try {
+		setSecret(inputs.githubToken);
+		if (inputs.vercelToken) setSecret(inputs.vercelToken);
+		const context = readGitHubRuntimeContext();
+		const runUrl = buildRunUrl(context);
+		const updatedAtUtc = (/* @__PURE__ */ new Date()).toISOString();
+		const { nextRows, deploymentUrls, statusKeys, deployFailure } = inputs.mode === "deploy-and-comment" ? await buildDeployAndCommentRows(inputs, runUrl, updatedAtUtc) : await buildCommentOnlyRows(inputs, runUrl, updatedAtUtc);
+		const client = new GitHubClient(inputs.githubToken, context);
+		const commentMarker = buildCommentMarker(inputs.commentMarker);
+		const existingComment = await client.findExistingActionComment(commentMarker);
+		const rows = upsertDeploymentCommentRows(parseDeploymentCommentRows(existingComment?.body ?? ""), nextRows, inputs.deployments.map((deployment) => buildRowKey(deployment)));
+		const body = renderDeploymentComment({
+			header: inputs.header,
+			footer: inputs.footer,
+			marker: inputs.commentMarker,
+			rows
 		});
-		rows.push({
-			projectName: getProjectName(deployment, details, deploymentUrl),
-			projectUrl: deployment.projectUrl,
-			previewUrl,
-			runUrl,
-			status,
-			updatedAtUtc
-		});
-		if (previewUrl) deploymentUrls.push(previewUrl);
-		statusKeys.push(status.key);
+		const comment = existingComment ? await client.updatePullRequestComment(existingComment.id, body) : await client.createPullRequestComment(body);
+		setOutput("comment-id", String(comment.id));
+		setOutput("comment-url", comment.htmlUrl);
+		setOutput("deployment-urls", JSON.stringify(deploymentUrls));
+		setOutput("statuses", JSON.stringify(statusKeys));
+		info(`Pull request comment ${comment.action}: ${comment.htmlUrl}`);
+		if (deployFailure) throw deployFailure;
+	} catch (error) {
+		throw new Error(sanitizeErrorMessage(error, inputs), { cause: toError(error) });
 	}
-	const body = renderDeploymentComment({
-		header: inputs.header,
-		footer: inputs.footer,
-		marker: inputs.commentMarker,
-		rows
-	});
-	const comment = await new GitHubClient(inputs.githubToken, context).upsertPullRequestComment(body, buildCommentMarker(inputs.commentMarker));
-	setOutput("comment-id", String(comment.id));
-	setOutput("comment-url", comment.htmlUrl);
-	setOutput("deployment-urls", JSON.stringify(deploymentUrls));
-	setOutput("statuses", JSON.stringify(statusKeys));
-	info(`Pull request comment ${comment.action}: ${comment.htmlUrl}`);
-	if (deployFailure) throw deployFailure;
 }
-function getProjectName(deployment, details, deploymentUrl) {
-	if (deployment.projectName) return deployment.projectName;
-	if (details?.project?.name) return details.project.name;
-	if (details?.name) return details.name;
-	if (deploymentUrl) return new URL(deploymentUrl).hostname;
-	return deployment.cwd ?? "Vercel Project";
+async function resolveOptionalMetadata(resolveValue, inputs) {
+	try {
+		return await resolveValue();
+	} catch (error) {
+		warning(sanitizeErrorMessage(error, inputs));
+		return;
+	}
 }
-function getPreviewUrl(deploymentUrl, details) {
-	const rawUrl = details?.url ?? deploymentUrl;
+function buildRowKey(deployment) {
+	return buildDeploymentRowKey(deployment.projectId, deployment.environment);
+}
+function getProjectName(deployment, projectDetails, deploymentDetails) {
+	if (deployment.displayName) return deployment.displayName;
+	if (projectDetails?.name) return projectDetails.name;
+	if (deploymentDetails?.project?.name) return deploymentDetails.project.name;
+	if (deploymentDetails?.name) return deploymentDetails.name;
+	return deployment.projectId;
+}
+function getPreviewUrl(deploymentUrl, deploymentDetails) {
+	const rawUrl = deploymentDetails?.url ?? deploymentUrl;
 	return rawUrl ? toHttpUrl(rawUrl) : void 0;
 }
 function getDeploymentUrlFromError(error) {
@@ -18298,6 +18511,115 @@ function sanitizeErrorMessage(error, inputs) {
 }
 function toError(error) {
 	return error instanceof Error ? error : new Error(String(error));
+}
+async function buildDeployAndCommentRows(inputs, runUrl, updatedAtUtc) {
+	const nextRows = [];
+	const deploymentUrls = [];
+	const statusKeys = [];
+	let deployFailure;
+	for (const deployment of inputs.deployments) {
+		let deploymentUrl = deployment.deploymentUrl;
+		let deploymentFailed = false;
+		try {
+			deploymentUrl = await runVercelDeploy({
+				deployment,
+				token: inputs.vercelToken,
+				exec
+			});
+		} catch (error) {
+			deploymentFailed = true;
+			deployFailure ??= toError(error);
+			deploymentUrl = getDeploymentUrlFromError(error) ?? deploymentUrl;
+			warning(sanitizeErrorMessage(error, inputs));
+			if (!inputs.commentOnFailure) throw error;
+		}
+		const { projectDetails, deploymentDetails } = await resolveDeploymentMetadata(inputs, deployment, deploymentUrl);
+		appendDeploymentRow({
+			nextRows,
+			deploymentUrls,
+			statusKeys,
+			deployment,
+			deploymentUrl,
+			deploymentDetails,
+			projectDetails,
+			deploymentFailed,
+			actionStatus: inputs.status,
+			runUrl,
+			updatedAtUtc
+		});
+	}
+	return {
+		nextRows,
+		deploymentUrls,
+		statusKeys,
+		deployFailure
+	};
+}
+async function buildCommentOnlyRows(inputs, runUrl, updatedAtUtc) {
+	const nextRows = [];
+	const deploymentUrls = [];
+	const statusKeys = [];
+	for (const deployment of inputs.deployments) {
+		const deploymentUrl = deployment.deploymentUrl;
+		const { projectDetails, deploymentDetails } = await resolveDeploymentMetadata(inputs, deployment, deploymentUrl);
+		appendDeploymentRow({
+			nextRows,
+			deploymentUrls,
+			statusKeys,
+			deployment,
+			deploymentUrl,
+			deploymentDetails,
+			projectDetails,
+			deploymentFailed: false,
+			actionStatus: inputs.status,
+			runUrl,
+			updatedAtUtc
+		});
+	}
+	return {
+		nextRows,
+		deploymentUrls,
+		statusKeys
+	};
+}
+async function resolveDeploymentMetadata(inputs, deployment, deploymentUrl) {
+	if (!inputs.vercelToken) return {};
+	const metadataToken = inputs.vercelToken;
+	return {
+		projectDetails: await resolveOptionalMetadata(() => getVercelProjectDetails({
+			projectId: deployment.projectId,
+			token: metadataToken,
+			teamId: deployment.teamId,
+			slug: deployment.slug,
+			fetch
+		}), inputs),
+		deploymentDetails: deploymentUrl ? await resolveOptionalMetadata(() => getVercelDeploymentDetails({
+			deploymentUrl,
+			token: metadataToken,
+			teamId: deployment.teamId,
+			slug: deployment.slug,
+			fetch
+		}), inputs) : void 0
+	};
+}
+function appendDeploymentRow(options) {
+	const previewUrl = getPreviewUrl(options.deploymentUrl, options.deploymentDetails);
+	const status = resolveDisplayStatus({
+		vercelReadyState: options.deploymentDetails?.readyState,
+		actionStatus: options.deploymentFailed ? "failure" : options.actionStatus
+	});
+	options.nextRows.push({
+		environment: options.deployment.environment,
+		projectId: options.deployment.projectId,
+		projectName: getProjectName(options.deployment, options.projectDetails, options.deploymentDetails),
+		projectUrl: options.deployment.projectUrl,
+		previewUrl,
+		runUrl: options.runUrl,
+		status,
+		updatedAtUtc: options.updatedAtUtc
+	});
+	if (previewUrl) options.deploymentUrls.push(previewUrl);
+	options.statusKeys.push(status.key);
 }
 function isDirectRun() {
 	return Boolean(process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href);

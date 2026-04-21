@@ -1,5 +1,5 @@
 name: "Vercel Deploy Comment"
-description: "Deploy one or more Vercel previews and keep a Vercel-style pull request comment updated."
+description: "Deploy one or more Vercel projects and environments and keep a Vercel-style pull request comment updated."
 author: "vercel-deploy-comment contributors"
 
 branding:
@@ -12,14 +12,14 @@ inputs:
     required: false
     default: ${{ github.token }}
   vercel-token:
-    description: "Vercel token used for deploy execution and Vercel Deployment API enrichment."
+    description: "Vercel token used for isolated pull/build/deploy execution and Vercel API enrichment."
     required: false
   mode:
     description: "Either deploy-and-comment or comment-only."
     required: false
     default: "deploy-and-comment"
   deployments:
-    description: "JSON array describing one or more deployments. Each entry renders as a row in the pull request comment."
+    description: "JSON array describing one or more project-driven deployments. deploy-and-comment entries require cwd, projectId, orgId, environment, and an absolute https projectUrl. comment-only entries require projectId, environment, an absolute https projectUrl, and an absolute https deploymentUrl."
     required: true
   header:
     description: "Markdown heading text for the pull request comment."
@@ -33,7 +33,7 @@ inputs:
     required: false
     default: "default"
   status:
-    description: "Fallback GitHub Actions status for comment-only mode."
+    description: "Fallback GitHub Actions status when Vercel deployment details are unavailable."
     required: false
     default: "success"
   comment-on-failure:

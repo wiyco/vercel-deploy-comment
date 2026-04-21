@@ -4,7 +4,9 @@ import { exec } from "@actions/exec";
 import { readActionInputs } from "./action/input";
 import {
   buildCommentMarker,
+  parseDeploymentCommentRows,
   renderDeploymentComment,
+  upsertDeploymentCommentRows,
 } from "./comment/markdown";
 import { resolveDisplayStatus } from "./comment/status";
 import {
@@ -12,147 +14,126 @@ import {
   GitHubClient,
   readGitHubRuntimeContext,
 } from "./github/client";
+import { buildDeploymentRowKey } from "./shared/deployment-key";
 import type {
+  ActionStatus,
+  BaseDeploymentInput,
+  CommentOnlyActionInputs,
+  DeployAndCommentActionInputs,
   DeploymentCommentRow,
   VercelDeploymentDetails,
+  VercelProjectDetails,
 } from "./shared/types";
 import {
   getVercelDeploymentDetails,
+  getVercelProjectDetails,
   runVercelDeploy,
   toHttpUrl,
 } from "./vercel/deployment";
 
 export async function run(): Promise<void> {
   const inputs = readActionInputs();
-  core.setSecret(inputs.githubToken);
+  try {
+    core.setSecret(inputs.githubToken);
 
-  if (inputs.vercelToken) {
-    core.setSecret(inputs.vercelToken);
-  }
-
-  const context = readGitHubRuntimeContext();
-  const runUrl = buildRunUrl(context);
-  const updatedAtUtc = new Date().toISOString();
-  const rows: DeploymentCommentRow[] = [];
-  const deploymentUrls: string[] = [];
-  const statusKeys: string[] = [];
-  let deployFailure: Error | undefined;
-
-  for (const deployment of inputs.deployments) {
-    let deploymentUrl = deployment.deploymentUrl;
-    let details: VercelDeploymentDetails | undefined;
-    let deploymentFailed = false;
-
-    if (inputs.mode === "deploy-and-comment") {
-      try {
-        deploymentUrl = await runVercelDeploy({
-          deployment,
-          token: inputs.vercelToken ?? "",
-          exec,
-        });
-      } catch (error) {
-        deploymentFailed = true;
-        deployFailure = toError(error);
-        deploymentUrl = getDeploymentUrlFromError(error) ?? deploymentUrl;
-        core.warning(sanitizeErrorMessage(error, inputs));
-
-        if (!inputs.commentOnFailure) {
-          throw error;
-        }
-      }
+    if (inputs.vercelToken) {
+      core.setSecret(inputs.vercelToken);
     }
 
-    if (deploymentUrl && inputs.vercelToken) {
-      try {
-        details = await getVercelDeploymentDetails({
-          deploymentUrl,
-          token: inputs.vercelToken,
-          teamId: deployment.teamId,
-          slug: deployment.slug,
-          fetch,
-        });
-      } catch (error) {
-        core.warning(sanitizeErrorMessage(error, inputs));
-      }
-    }
+    const context = readGitHubRuntimeContext();
+    const runUrl = buildRunUrl(context);
+    const updatedAtUtc = new Date().toISOString();
+    const { nextRows, deploymentUrls, statusKeys, deployFailure } =
+      inputs.mode === "deploy-and-comment"
+        ? await buildDeployAndCommentRows(inputs, runUrl, updatedAtUtc)
+        : await buildCommentOnlyRows(inputs, runUrl, updatedAtUtc);
 
-    const previewUrl = getPreviewUrl(deploymentUrl, details);
-    const status = resolveDisplayStatus({
-      vercelReadyState: details?.readyState,
-      actionStatus: deploymentFailed ? "failure" : inputs.status,
+    const client = new GitHubClient(inputs.githubToken, context);
+    const commentMarker = buildCommentMarker(inputs.commentMarker);
+    const existingComment =
+      await client.findExistingActionComment(commentMarker);
+    const existingRows = parseDeploymentCommentRows(
+      existingComment?.body ?? "",
+    );
+    const rows = upsertDeploymentCommentRows(
+      existingRows,
+      nextRows,
+      inputs.deployments.map((deployment) => buildRowKey(deployment)),
+    );
+    const body = renderDeploymentComment({
+      header: inputs.header,
+      footer: inputs.footer,
+      marker: inputs.commentMarker,
+      rows,
     });
+    const comment = existingComment
+      ? await client.updatePullRequestComment(existingComment.id, body)
+      : await client.createPullRequestComment(body);
 
-    rows.push({
-      projectName: getProjectName(deployment, details, deploymentUrl),
-      projectUrl: deployment.projectUrl,
-      previewUrl,
-      runUrl,
-      status,
-      updatedAtUtc,
-    });
+    core.setOutput("comment-id", String(comment.id));
+    core.setOutput("comment-url", comment.htmlUrl);
+    core.setOutput("deployment-urls", JSON.stringify(deploymentUrls));
+    core.setOutput("statuses", JSON.stringify(statusKeys));
+    core.info(`Pull request comment ${comment.action}: ${comment.htmlUrl}`);
 
-    if (previewUrl) {
-      deploymentUrls.push(previewUrl);
+    if (deployFailure) {
+      throw deployFailure;
     }
-
-    statusKeys.push(status.key);
-  }
-
-  const body = renderDeploymentComment({
-    header: inputs.header,
-    footer: inputs.footer,
-    marker: inputs.commentMarker,
-    rows,
-  });
-  const client = new GitHubClient(inputs.githubToken, context);
-  const comment = await client.upsertPullRequestComment(
-    body,
-    buildCommentMarker(inputs.commentMarker),
-  );
-
-  core.setOutput("comment-id", String(comment.id));
-  core.setOutput("comment-url", comment.htmlUrl);
-  core.setOutput("deployment-urls", JSON.stringify(deploymentUrls));
-  core.setOutput("statuses", JSON.stringify(statusKeys));
-  core.info(`Pull request comment ${comment.action}: ${comment.htmlUrl}`);
-
-  if (deployFailure) {
-    throw deployFailure;
+  } catch (error) {
+    throw new Error(sanitizeErrorMessage(error, inputs), {
+      cause: toError(error),
+    });
   }
 }
 
-function getProjectName(
-  deployment: {
-    projectName?: string;
-    cwd?: string;
+async function resolveOptionalMetadata<T>(
+  resolveValue: () => Promise<T>,
+  inputs: {
+    githubToken: string;
+    vercelToken?: string;
   },
-  details: VercelDeploymentDetails | undefined,
-  deploymentUrl: string | undefined,
+): Promise<T | undefined> {
+  try {
+    return await resolveValue();
+  } catch (error) {
+    core.warning(sanitizeErrorMessage(error, inputs));
+    return undefined;
+  }
+}
+
+function buildRowKey(deployment: BaseDeploymentInput): string {
+  return buildDeploymentRowKey(deployment.projectId, deployment.environment);
+}
+
+function getProjectName(
+  deployment: BaseDeploymentInput,
+  projectDetails: VercelProjectDetails | undefined,
+  deploymentDetails: VercelDeploymentDetails | undefined,
 ): string {
-  if (deployment.projectName) {
-    return deployment.projectName;
+  if (deployment.displayName) {
+    return deployment.displayName;
   }
 
-  if (details?.project?.name) {
-    return details.project.name;
+  if (projectDetails?.name) {
+    return projectDetails.name;
   }
 
-  if (details?.name) {
-    return details.name;
+  if (deploymentDetails?.project?.name) {
+    return deploymentDetails.project.name;
   }
 
-  if (deploymentUrl) {
-    return new URL(deploymentUrl).hostname;
+  if (deploymentDetails?.name) {
+    return deploymentDetails.name;
   }
 
-  return deployment.cwd ?? "Vercel Project";
+  return deployment.projectId;
 }
 
 function getPreviewUrl(
   deploymentUrl: string | undefined,
-  details: VercelDeploymentDetails | undefined,
+  deploymentDetails: VercelDeploymentDetails | undefined,
 ): string | undefined {
-  const rawUrl = details?.url ?? deploymentUrl;
+  const rawUrl = deploymentDetails?.url ?? deploymentUrl;
   return rawUrl ? toHttpUrl(rawUrl) : undefined;
 }
 
@@ -192,6 +173,195 @@ function sanitizeErrorMessage(
 
 function toError(error: unknown): Error {
   return error instanceof Error ? error : new Error(String(error));
+}
+
+interface BuildRowsResult {
+  nextRows: DeploymentCommentRow[];
+  deploymentUrls: string[];
+  statusKeys: string[];
+  deployFailure?: Error;
+}
+
+async function buildDeployAndCommentRows(
+  inputs: DeployAndCommentActionInputs,
+  runUrl: string,
+  updatedAtUtc: string,
+): Promise<BuildRowsResult> {
+  const nextRows: DeploymentCommentRow[] = [];
+  const deploymentUrls: string[] = [];
+  const statusKeys: string[] = [];
+  let deployFailure: Error | undefined;
+
+  for (const deployment of inputs.deployments) {
+    let deploymentUrl = deployment.deploymentUrl;
+    let deploymentFailed = false;
+
+    try {
+      deploymentUrl = await runVercelDeploy({
+        deployment,
+        token: inputs.vercelToken,
+        exec,
+      });
+    } catch (error) {
+      deploymentFailed = true;
+      deployFailure ??= toError(error);
+      deploymentUrl = getDeploymentUrlFromError(error) ?? deploymentUrl;
+      core.warning(sanitizeErrorMessage(error, inputs));
+
+      if (!inputs.commentOnFailure) {
+        throw error;
+      }
+    }
+
+    const { projectDetails, deploymentDetails } =
+      await resolveDeploymentMetadata(inputs, deployment, deploymentUrl);
+    appendDeploymentRow({
+      nextRows,
+      deploymentUrls,
+      statusKeys,
+      deployment,
+      deploymentUrl,
+      deploymentDetails,
+      projectDetails,
+      deploymentFailed,
+      actionStatus: inputs.status,
+      runUrl,
+      updatedAtUtc,
+    });
+  }
+
+  return {
+    nextRows,
+    deploymentUrls,
+    statusKeys,
+    deployFailure,
+  };
+}
+
+async function buildCommentOnlyRows(
+  inputs: CommentOnlyActionInputs,
+  runUrl: string,
+  updatedAtUtc: string,
+): Promise<BuildRowsResult> {
+  const nextRows: DeploymentCommentRow[] = [];
+  const deploymentUrls: string[] = [];
+  const statusKeys: string[] = [];
+
+  for (const deployment of inputs.deployments) {
+    const deploymentUrl = deployment.deploymentUrl;
+    const { projectDetails, deploymentDetails } =
+      await resolveDeploymentMetadata(inputs, deployment, deploymentUrl);
+    appendDeploymentRow({
+      nextRows,
+      deploymentUrls,
+      statusKeys,
+      deployment,
+      deploymentUrl,
+      deploymentDetails,
+      projectDetails,
+      deploymentFailed: false,
+      actionStatus: inputs.status,
+      runUrl,
+      updatedAtUtc,
+    });
+  }
+
+  return {
+    nextRows,
+    deploymentUrls,
+    statusKeys,
+  };
+}
+
+async function resolveDeploymentMetadata(
+  inputs: {
+    githubToken: string;
+    vercelToken?: string;
+  },
+  deployment: BaseDeploymentInput,
+  deploymentUrl: string | undefined,
+): Promise<{
+  projectDetails?: VercelProjectDetails;
+  deploymentDetails?: VercelDeploymentDetails;
+}> {
+  if (!inputs.vercelToken) {
+    return {};
+  }
+
+  const metadataToken = inputs.vercelToken;
+  const projectDetails = await resolveOptionalMetadata(
+    () =>
+      getVercelProjectDetails({
+        projectId: deployment.projectId,
+        token: metadataToken,
+        teamId: deployment.teamId,
+        slug: deployment.slug,
+        fetch,
+      }),
+    inputs,
+  );
+  const deploymentDetails = deploymentUrl
+    ? await resolveOptionalMetadata(
+        () =>
+          getVercelDeploymentDetails({
+            deploymentUrl,
+            token: metadataToken,
+            teamId: deployment.teamId,
+            slug: deployment.slug,
+            fetch,
+          }),
+        inputs,
+      )
+    : undefined;
+
+  return {
+    projectDetails,
+    deploymentDetails,
+  };
+}
+
+function appendDeploymentRow(options: {
+  nextRows: DeploymentCommentRow[];
+  deploymentUrls: string[];
+  statusKeys: string[];
+  deployment: BaseDeploymentInput;
+  deploymentUrl: string | undefined;
+  deploymentDetails?: VercelDeploymentDetails;
+  projectDetails?: VercelProjectDetails;
+  deploymentFailed: boolean;
+  actionStatus: ActionStatus;
+  runUrl: string;
+  updatedAtUtc: string;
+}): void {
+  const previewUrl = getPreviewUrl(
+    options.deploymentUrl,
+    options.deploymentDetails,
+  );
+  const status = resolveDisplayStatus({
+    vercelReadyState: options.deploymentDetails?.readyState,
+    actionStatus: options.deploymentFailed ? "failure" : options.actionStatus,
+  });
+
+  options.nextRows.push({
+    environment: options.deployment.environment,
+    projectId: options.deployment.projectId,
+    projectName: getProjectName(
+      options.deployment,
+      options.projectDetails,
+      options.deploymentDetails,
+    ),
+    projectUrl: options.deployment.projectUrl,
+    previewUrl,
+    runUrl: options.runUrl,
+    status,
+    updatedAtUtc: options.updatedAtUtc,
+  });
+
+  if (previewUrl) {
+    options.deploymentUrls.push(previewUrl);
+  }
+
+  options.statusKeys.push(status.key);
 }
 
 function isDirectRun(): boolean {

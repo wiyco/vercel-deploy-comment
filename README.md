@@ -48,7 +48,7 @@ jobs:
       - uses: pnpm/action-setup@v4
       - run: pnpm install --frozen-lockfile
       - run: npm install --global vercel@latest
-      - uses: wiyco/vercel-deploy-comment@v1 # or pin to a specific commit SHA
+      - uses: wiyco/vercel-deploy-comment@v2 # or pin to a specific commit SHA
         with:
           vercel-token: ${{ secrets.VERCEL_TOKEN }}
           deployments: |
@@ -131,7 +131,7 @@ Legacy `deployments[].command` and `deployments[].projectName` are no longer sup
 ## Comment-only Mode
 
 ```yaml
-- uses: wiyco/vercel-deploy-comment@v1
+- uses: wiyco/vercel-deploy-comment@2
   with:
     mode: comment-only
     vercel-token: ${{ secrets.VERCEL_TOKEN }}

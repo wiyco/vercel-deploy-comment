@@ -1,6 +1,6 @@
 {
   "name": "vercel-deploy-comment",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "description": "A GitHub Action that deploys Vercel projects and environments and keeps a pull request comment updated.",
   "type": "module",
   "main": "dist/index.js",

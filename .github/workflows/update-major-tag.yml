@@ -1,0 +1,83 @@
+name: Update major tag on release
+on:
+  release:
+    types: [published]
+jobs:
+  update-major-tag:
+    if: ${{ github.event.release.draft == false && github.event.release.prerelease == false && github.ref_type == 'tag' && startsWith(github.ref, 'refs/tags/') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    concurrency:
+      group: ${{ github.workflow }}-major-tag
+      cancel-in-progress: false
+    env:
+      DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+      RELEASE_SHA: ${{ github.sha }}
+      RELEASE_TAG: ${{ github.event.release.tag_name }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+      - name: Validate release tag and ancestry
+        id: validate
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ ! "$RELEASE_TAG" =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+            echo "Stable action releases must use semver tags like v1.2.3. Got: $RELEASE_TAG"
+            exit 1
+          fi
+
+          if [[ -z "$DEFAULT_BRANCH" ]]; then
+            echo "Repository default branch is unavailable."
+            exit 1
+          fi
+
+          MAJOR_TAG="v${BASH_REMATCH[1]}"
+          echo "major-tag=$MAJOR_TAG" >> "$GITHUB_OUTPUT"
+
+          if ! RELEASE_TAG_SHA="$(git rev-parse --verify "refs/tags/$RELEASE_TAG^{commit}" 2>/dev/null)"; then
+            echo "Release tag $RELEASE_TAG could not be resolved to a commit."
+            exit 1
+          fi
+
+          echo "release-sha=$RELEASE_TAG_SHA" >> "$GITHUB_OUTPUT"
+
+          if [[ "$RELEASE_TAG_SHA" != "$RELEASE_SHA" ]]; then
+            echo "Release tag $RELEASE_TAG resolves to $RELEASE_TAG_SHA, but event SHA is $RELEASE_SHA."
+            exit 1
+          fi
+
+          if ! git rev-parse --verify "refs/remotes/origin/$DEFAULT_BRANCH" >/dev/null 2>&1; then
+            echo "Default branch ref refs/remotes/origin/$DEFAULT_BRANCH is unavailable."
+            exit 1
+          fi
+
+          if ! git merge-base --is-ancestor "$RELEASE_TAG_SHA" "refs/remotes/origin/$DEFAULT_BRANCH"; then
+            echo "Release tag $RELEASE_TAG ($RELEASE_TAG_SHA) is not reachable from $DEFAULT_BRANCH."
+            exit 1
+          fi
+      - name: Update major tag
+        shell: bash
+        env:
+          MAJOR_TAG: ${{ steps.validate.outputs.major-tag }}
+          RELEASE_SHA: ${{ steps.validate.outputs.release-sha }}
+        run: |
+          set -euo pipefail
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git tag --force "$MAJOR_TAG" "$RELEASE_SHA"
+          git push --force origin "refs/tags/$MAJOR_TAG"
+
+          {
+            echo "Updated \`$MAJOR_TAG\` to \`$RELEASE_TAG\`."
+            echo
+            echo "- Release tag: \`$RELEASE_TAG\`"
+            echo "- Release commit: \`$RELEASE_SHA\`"
+            echo "- Default branch ancestry verified against \`$DEFAULT_BRANCH\`"
+          } >> "$GITHUB_STEP_SUMMARY"

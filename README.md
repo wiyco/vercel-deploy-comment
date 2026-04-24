@@ -41,11 +41,11 @@ jobs:
   preview:
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v6
       - uses: actions/setup-node@v6
         with:
           node-version: 24
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v5
       - run: pnpm install --frozen-lockfile
       - run: npm install --global vercel@latest
       - uses: wiyco/vercel-deploy-comment@v2 # or pin to a specific commit SHA

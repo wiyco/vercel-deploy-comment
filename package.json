@@ -37,7 +37,7 @@
   "engines": {
     "node": ">=24"
   },
-  "packageManager": "pnpm@10.33.0",
+  "packageManager": "pnpm@10.33.4",
   "dependencies": {
     "@actions/core": "^3.0.0",
     "@actions/exec": "^3.0.0"

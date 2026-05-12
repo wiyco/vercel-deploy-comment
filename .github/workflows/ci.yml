@@ -18,7 +18,7 @@ jobs:
           node-version: "24"
           cache: "pnpm"
       - run: pnpm install --frozen-lockfile
-      # - run: pnpm audit --audit-level=high # Temporarily disabled due to https://github.com/pnpm/pnpm/issues/11265
+      - run: pnpm audit --audit-level=high
       - run: pnpm run check
       - run: pnpm run test:coverage
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

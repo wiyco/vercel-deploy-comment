@@ -19,7 +19,7 @@ inputs:
     required: false
     default: "deploy-and-comment"
   deployments:
-    description: "JSON array describing one or more project-driven deployments. deploy-and-comment entries require cwd, projectId, orgId, environment, and an absolute https projectUrl. comment-only entries require projectId, environment, an absolute https projectUrl, and an absolute https deploymentUrl."
+    description: "JSON array describing one or more project-driven deployments. deploy-and-comment entries require cwd, projectId, orgId, environment, and an absolute https projectUrl, and may include an absolute https deploymentUrl. comment-only entries require projectId, environment, an absolute https projectUrl, and an absolute https deploymentUrl."
     required: true
   header:
     description: "Markdown heading text for the pull request comment."

@@ -101,25 +101,43 @@ The action strips GitHub Actions `INPUT_*` variables from all Vercel CLI child p
 
 Top-level inputs:
 
-- `github-token`: GitHub token for PR comment APIs. Defaults to `github.token`.
-- `vercel-token`: Vercel token for CLI execution and API enrichment. Required in `deploy-and-comment`.
-- `mode`: `deploy-and-comment` or `comment-only`. Default is `deploy-and-comment`.
-- `deployments`: Non-empty JSON array of deployment entries.
-- `header`: Markdown heading text. Default is `Vercel Preview Deployment`.
-- `footer`: Optional Markdown appended below the table.
-- `comment-marker`: Stable key for the managed PR comment. Default is `default`.
-- `status`: Fallback action status when Vercel deployment details are unavailable. Default is `success`.
-- `comment-on-failure`: When `true`, failed deploy rows are still upserted before the action fails. Default is `true`.
+| Input | Required | Description | Default |
+| :--- | :--- | :--- | :--- |
+| `github-token` | No | GitHub token for PR comment APIs. | `github.token` |
+| `vercel-token` | `deploy-and-comment` only | Vercel token for CLI execution and API enrichment. | - |
+| `mode` | No | Selects `deploy-and-comment` or `comment-only`. | `deploy-and-comment` |
+| `deployments` | Yes | Non-empty JSON array of deployment entries. | - |
+| `header` | No | Markdown heading text shown above the table. | `Vercel Preview Deployment` |
+| `footer` | No | Optional Markdown appended below the table. | - |
+| `comment-marker` | No | Stable key for the managed PR comment. | `default` |
+| `status` | No | Fallback action status when Vercel deployment details are unavailable. | `success` |
+| `comment-on-failure` | No | When `true`, failed deploy rows are still upserted before the action fails. | `true` |
 
 `deploy-and-comment` entries:
 
-- Required: `cwd`, `projectId`, `orgId`, `environment`, `projectUrl`
-- Optional: `displayName`, `teamId`, `slug`
+| Field | Required | Description |
+| :--- | :--- | :--- |
+| `cwd` | Yes | Working directory copied into the isolated temporary workspace before running the Vercel CLI. |
+| `projectId` | Yes | Vercel project ID used for project API lookup. |
+| `orgId` | Yes | Vercel organization ID written into `.vercel/project.json`. |
+| `environment` | Yes | Vercel deployment environment passed to `vercel pull`. |
+| `projectUrl` | Yes | Absolute `https://` URL for the Vercel project. |
+| `deploymentUrl` | No | Optional absolute `https://` URL used as a preview URL hint or fallback when resolving deployment metadata. |
+| `displayName` | No | Display override for the project name shown in the PR comment. |
+| `teamId` | No | Optional Vercel team ID used for API enrichment. |
+| `slug` | No | Optional Vercel team or account slug used for API enrichment. |
 
 `comment-only` entries:
 
-- Required: `projectId`, `environment`, `projectUrl`, `deploymentUrl`
-- Optional: `displayName`, `teamId`, `slug`
+| Field | Required | Description |
+| :--- | :--- | :--- |
+| `projectId` | Yes | Vercel project ID used for project API lookup. |
+| `environment` | Yes | Deployment environment rendered in the PR comment. |
+| `projectUrl` | Yes | Absolute `https://` URL for the Vercel project. |
+| `deploymentUrl` | Yes | Absolute `https://` URL for the deployment preview. |
+| `displayName` | No | Display override for the project name shown in the PR comment. |
+| `teamId` | No | Optional Vercel team ID used for API enrichment. |
+| `slug` | No | Optional Vercel team or account slug used for API enrichment. |
 
 `projectUrl` and `deploymentUrl` must be absolute `https://` URLs. `http://` links are rejected so untrusted workflow input cannot render insecure or phishing-oriented links into the managed PR comment.
 

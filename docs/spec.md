@@ -30,6 +30,7 @@ Required fields:
 
 Optional fields:
 
+- `deploymentUrl: string` as an absolute `https://` URL
 - `displayName: string`
 - `teamId: string`
 - `slug: string`

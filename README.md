@@ -96,7 +96,7 @@ For each `deploy-and-comment` entry, the action:
 
 > [!NOTE]
 >
-> Multiple `deploy-and-comment` entries within one action invocation run in parallel, and the managed PR comment is created or updated once after all rows are ready. Each row uses an isolated temp workspace, so repo-local `.vercel` state is not shared across projects or environments, including multiple rows that point at the same source `cwd`.
+> Multiple `deploy-and-comment` entries within one action invocation run in parallel up to `deployment-concurrency` at a time, and the managed PR comment is created or updated once after all rows are ready. Each row uses an isolated temp workspace, so repo-local `.vercel` state is not shared across projects or environments, including multiple rows that point at the same source `cwd`.
 
 The action strips GitHub Actions `INPUT_*` variables from all Vercel CLI child processes and passes `vercel-token` to authenticated steps through `VERCEL_TOKEN`, so action input secrets do not appear in command-line arguments or in the local build step's environment. Other workflow-managed secrets still remain visible to `vercel build` if the workflow exports them through non-`INPUT_*` environment variables.
 
@@ -109,6 +109,7 @@ Top-level inputs:
 | `github-token` | No | GitHub token for PR comment APIs. | `github.token` |
 | `vercel-token` | `deploy-and-comment` only | Vercel token for CLI execution and API enrichment. | - |
 | `mode` | No | Selects `deploy-and-comment` or `comment-only`. | `deploy-and-comment` |
+| `deployment-concurrency` | No | Maximum number of `deploy-and-comment` entries to execute at once. | `2` |
 | `deployments` | Yes | Non-empty JSON array of deployment entries. | - |
 | `header` | No | Markdown heading text shown above the table. | `Vercel Preview Deployment` |
 | `footer` | No | Optional Markdown appended below the table. | - |

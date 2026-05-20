@@ -163,6 +163,15 @@ export class GitHubClient {
     };
   }
 
+  async deletePullRequestComment(commentId: number): Promise<void> {
+    await this.requestWithoutResponse(
+      `/repos/${this.#context.owner}/${this.#context.repo}/issues/comments/${commentId}`,
+      {
+        method: "DELETE",
+      },
+    );
+  }
+
   async findExistingActionComment(
     hiddenMarker: string,
   ): Promise<IssueComment | undefined> {
@@ -228,6 +237,17 @@ export class GitHubClient {
     return this.#requestJson<T>(url, init);
   }
 
+  async requestWithoutResponse(
+    path: string,
+    init: RequestInit = {},
+  ): Promise<void> {
+    const url = new URL(
+      stripLeadingSlash(path),
+      ensureTrailingSlash(this.#context.apiUrl),
+    );
+    await this.#requestWithoutResponse(url, init);
+  }
+
   async #listPullRequestCommentPage(page: number): Promise<IssueComment[]> {
     return this.request<IssueComment[]>(
       `/repos/${this.#context.owner}/${this.#context.repo}/issues/${this.#context.issueNumber}/comments?per_page=100&page=${page}`,
@@ -273,7 +293,38 @@ export class GitHubClient {
       );
     }
 
-    return (await response.json()) as T;
+    const responseText = await response.text();
+
+    if (!responseText.trim()) {
+      throw new Error("GitHub API response body was empty.");
+    }
+
+    return JSON.parse(responseText) as T;
+  }
+
+  async #requestWithoutResponse(
+    url: URL,
+    init: RequestInit = {},
+  ): Promise<void> {
+    const response = await this.#fetch(url, {
+      ...init,
+      headers: buildHeaders(this.#token, init.headers),
+    });
+
+    if (!response.ok) {
+      throw new GitHubApiError(
+        `GitHub API request failed with status ${response.status} ${response.statusText}.`,
+        response.status,
+      );
+    }
+
+    if (response.status === 204) {
+      return;
+    }
+
+    throw new Error(
+      `GitHub API request expected status 204 No Content, but received ${response.status} ${response.statusText}.`,
+    );
   }
 }
 

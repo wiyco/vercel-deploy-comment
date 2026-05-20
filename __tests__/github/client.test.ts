@@ -268,6 +268,99 @@ describe("GitHubClient", () => {
     expect(calls[2]?.url.pathname).toBe("/repos/acme/repo/issues/42/comments");
   });
 
+  it("deletes a pull request comment", async () => {
+    const calls: Array<{
+      url: URL;
+      init?: RequestInit;
+    }> = [];
+    const client = new GitHubClient(
+      "ghs_token",
+      context,
+      async (input, init) => {
+        const url = input instanceof URL ? input : new URL(input);
+        calls.push({
+          url,
+          init,
+        });
+
+        return new Response(null, {
+          status: 204,
+        });
+      },
+    );
+
+    await expect(client.deletePullRequestComment(10)).resolves.toBeUndefined();
+
+    expect(calls[0]?.init?.method).toBe("DELETE");
+    expect(calls[0]?.url.pathname).toBe("/repos/acme/repo/issues/comments/10");
+  });
+
+  it("rejects delete responses that return 205 instead of 204", async () => {
+    const client = new GitHubClient(
+      "ghs_token",
+      context,
+      async () =>
+        new Response(null, {
+          status: 205,
+          statusText: "Reset Content",
+        }),
+    );
+
+    await expect(client.deletePullRequestComment(10)).rejects.toThrow(
+      "GitHub API request expected status 204 No Content, but received 205 Reset Content.",
+    );
+  });
+
+  it("rejects delete responses that return 200 instead of 204", async () => {
+    const client = new GitHubClient(
+      "ghs_token",
+      context,
+      async () =>
+        new Response(" \n\t ", {
+          status: 200,
+          statusText: "OK",
+        }),
+    );
+
+    await expect(client.deletePullRequestComment(10)).rejects.toThrow(
+      "GitHub API request expected status 204 No Content, but received 200 OK.",
+    );
+  });
+
+  it("surfaces failed delete requests as GitHub API errors", async () => {
+    const client = new GitHubClient(
+      "ghs_token",
+      context,
+      async () =>
+        new Response("boom", {
+          status: 500,
+          statusText: "Internal Server Error",
+        }),
+    );
+
+    await expect(client.deletePullRequestComment(10)).rejects.toBeInstanceOf(
+      GitHubApiError,
+    );
+    await expect(client.deletePullRequestComment(10)).rejects.toThrow(
+      "GitHub API request failed with status 500 Internal Server Error.",
+    );
+  });
+
+  it("rejects empty JSON responses for non-void requests", async () => {
+    const client = new GitHubClient(
+      "ghs_token",
+      context,
+      async () =>
+        new Response(null, {
+          status: 200,
+        }),
+    );
+
+    await expect(client.createPullRequestComment("new body")).rejects.toThrow(
+      "GitHub API response body was empty.",
+    );
+  });
+
   it("does not match comments whose marker only shares a prefix", async () => {
     const calls: Array<{
       url: URL;

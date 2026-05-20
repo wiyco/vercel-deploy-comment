@@ -99,7 +99,7 @@ vercel deploy --prebuilt
 
 > [!NOTE]
 >
-> `deploy-and-comment` entries in one action invocation run in parallel up to `deployment-concurrency` at a time. After every row is ready, the action performs one managed comment create-or-update using the combined row set.
+> `deploy-and-comment` entries in one action invocation run in parallel up to `deployment-concurrency` at a time. Before the deploys start, the action performs one managed comment create-or-update with `In Progress` rows for the current input. After every row is ready, it updates that same managed comment with the combined final row set.
 >
 > This design makes same-`cwd`, multi-project and multi-environment deployments safe because local `.vercel` state is not shared between rows.
 
@@ -219,7 +219,7 @@ Vercel `readyState` is preferred when available. Otherwise the fallback GitHub A
 ## Failure Behavior
 
 - If `pull`, `build`, or `deploy` fails and `comment-on-failure` is `true`, the action still upserts the affected row with failure status, then fails the action.
-- If `comment-on-failure` is `false`, the action fails immediately without updating the comment.
+- If `comment-on-failure` is `false`, the action rolls back the temporary `In Progress` write and fails without keeping a new comment state from the failed run.
 - Vercel API enrichment failures do not block comment updates.
 
 ## Security Requirements
@@ -253,6 +253,7 @@ permissions:
 - Serialized jobs and workflow runs with the same `comment-marker` can add or replace independent rows in that same comment.
 - Same-`cwd` multi-project deployments do not share `.vercel/project.json`.
 - `deploy-and-comment` execution does not start more than `deployment-concurrency` rows at once.
+- `deploy-and-comment` writes `In Progress` rows before starting work and replaces them with final statuses after row resolution.
 - Custom environments trigger the `Environment` column for all rows.
 - Deploy failures can still update the comment when `comment-on-failure` is `true`.
 - The implementation passes typecheck, lint, tests, and build.

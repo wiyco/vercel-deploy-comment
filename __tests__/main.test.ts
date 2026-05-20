@@ -21,10 +21,12 @@ const readGitHubRuntimeContext = vi.fn(() => ({
 }));
 const findExistingActionComment = vi.fn();
 const createPullRequestComment = vi.fn();
+const deletePullRequestComment = vi.fn();
 const updatePullRequestComment = vi.fn();
 const GitHubClient = vi.fn().mockImplementation(function MockGitHubClient() {
   return {
     createPullRequestComment,
+    deletePullRequestComment,
     findExistingActionComment,
     updatePullRequestComment,
   };
@@ -108,6 +110,7 @@ describe("run", () => {
       htmlUrl: "https://github.test/acme/repo/pull/42#issuecomment-10",
       id: 10,
     });
+    deletePullRequestComment.mockResolvedValue(undefined);
     updatePullRequestComment.mockResolvedValue({
       action: "updated",
       htmlUrl: "https://github.test/acme/repo/pull/42#issuecomment-10",
@@ -127,11 +130,37 @@ describe("run", () => {
 
     await expect(run()).rejects.toThrow("deploy failed with *** and ***");
     expect(warning).toHaveBeenCalledWith("deploy failed with *** and ***");
+    expect(createPullRequestComment).toHaveBeenCalledTimes(1);
+    expect(deletePullRequestComment).toHaveBeenCalledWith(10);
     expect(setSecret).toHaveBeenNthCalledWith(1, "ghs_token");
     expect(setSecret).toHaveBeenNthCalledWith(2, "vercel_token");
   });
 
-  it("runs deployments in parallel and updates the comment once after all rows are resolved", async () => {
+  it("rolls back the temporary in-progress comment when the final update fails", async () => {
+    findExistingActionComment
+      .mockResolvedValueOnce(undefined)
+      .mockResolvedValue({
+        body: "## Preview\n\n<!-- vercel-deploy-comment:default -->\n",
+        id: 10,
+      });
+    runVercelDeploy.mockResolvedValue(
+      "https://web-git-feature-team.vercel.app",
+    );
+    updatePullRequestComment.mockRejectedValueOnce(
+      new Error("final comment write failed"),
+    );
+
+    const { run } = await import("../src/main");
+
+    await expect(run()).rejects.toThrow("final comment write failed");
+
+    expect(createPullRequestComment).toHaveBeenCalledTimes(1);
+    expect(updatePullRequestComment).toHaveBeenCalledTimes(1);
+    expect(deletePullRequestComment).toHaveBeenCalledWith(10);
+    expect(setOutput).not.toHaveBeenCalled();
+  });
+
+  it("writes an initial In Progress comment and updates it after all rows are resolved", async () => {
     const webDeployment = createDeferred<string>();
     const adminDeployment = createDeferred<string>();
     const docsDeployment = createDeferred<string>();
@@ -170,6 +199,12 @@ describe("run", () => {
       status: "success",
       commentOnFailure: false,
     });
+    findExistingActionComment
+      .mockResolvedValueOnce(undefined)
+      .mockResolvedValue({
+        body: "## Preview\n\n<!-- vercel-deploy-comment:default -->\n",
+        id: 10,
+      });
     runVercelDeploy.mockImplementation(
       ({
         deployment,
@@ -193,6 +228,9 @@ describe("run", () => {
     const { run } = await import("../src/main");
 
     const runPromise = run();
+    await vi.waitFor(() => {
+      expect(createPullRequestComment).toHaveBeenCalledTimes(1);
+    });
 
     expect(runVercelDeploy).toHaveBeenCalledTimes(2);
     expect(
@@ -209,23 +247,28 @@ describe("run", () => {
     expect(runVercelDeploy.mock.calls[2]?.[0].deployment.projectId).toBe(
       "prj_docs",
     );
-    expect(createPullRequestComment).not.toHaveBeenCalled();
+    const initialCommentBody = createPullRequestComment.mock.calls[0]?.[0];
+    expect(initialCommentBody).toContain(
+      "<!-- vercel-deploy-comment:default -->",
+    );
+    expect(initialCommentBody).toContain("⏳ [In Progress]");
 
     webDeployment.resolve("https://web-git-feature-team.vercel.app");
     await Promise.resolve();
-    expect(createPullRequestComment).not.toHaveBeenCalled();
+    expect(updatePullRequestComment).not.toHaveBeenCalled();
 
     docsDeployment.resolve("https://docs-git-feature-team.vercel.app");
     await expect(runPromise).resolves.toBeUndefined();
 
     expect(createPullRequestComment).toHaveBeenCalledTimes(1);
-    const commentBody = createPullRequestComment.mock.calls[0]?.[0];
-    expect(commentBody).toContain("<!-- vercel-deploy-comment:default -->");
-    expect(commentBody.indexOf("row:prj_web:preview")).toBeLessThan(
-      commentBody.indexOf("row:prj_admin:preview"),
+    expect(updatePullRequestComment).toHaveBeenCalledTimes(1);
+    const finalCommentBody = updatePullRequestComment.mock.calls[0]?.[1];
+    expect(finalCommentBody).toContain("✅ [Ready]");
+    expect(finalCommentBody.indexOf("row:prj_web:preview")).toBeLessThan(
+      finalCommentBody.indexOf("row:prj_admin:preview"),
     );
-    expect(commentBody.indexOf("row:prj_admin:preview")).toBeLessThan(
-      commentBody.indexOf("row:prj_docs:preview"),
+    expect(finalCommentBody.indexOf("row:prj_admin:preview")).toBeLessThan(
+      finalCommentBody.indexOf("row:prj_docs:preview"),
     );
     expect(setOutput).toHaveBeenCalledWith(
       "deployment-urls",

@@ -18606,13 +18606,10 @@ function toError(error) {
 	return error instanceof Error ? error : new Error(String(error));
 }
 async function buildDeployAndCommentRows(inputs, runUrl, updatedAtUtc) {
-	const nextRows = [];
-	const deploymentUrls = [];
-	const statusKeys = [];
-	let deployFailure;
-	for (const deployment of inputs.deployments) {
+	const deploymentResults = await Promise.all(inputs.deployments.map(async (deployment) => {
 		let deploymentUrl = deployment.deploymentUrl;
 		let deploymentFailed = false;
+		let deployFailure;
 		try {
 			deploymentUrl = await runVercelDeploy({
 				deployment,
@@ -18621,25 +18618,37 @@ async function buildDeployAndCommentRows(inputs, runUrl, updatedAtUtc) {
 			});
 		} catch (error) {
 			deploymentFailed = true;
-			deployFailure ??= toError(error);
+			deployFailure = toError(error);
 			deploymentUrl = getDeploymentUrlFromError(error) ?? deploymentUrl;
 			warning(sanitizeErrorMessage(error, inputs));
 			if (!inputs.commentOnFailure) throw error;
 		}
 		const { projectDetails, deploymentDetails } = await resolveDeploymentMetadata(inputs, deployment, deploymentUrl);
-		appendDeploymentRow({
+		return {
+			deploymentResult: buildDeploymentRowResult({
+				deployment,
+				deploymentUrl,
+				deploymentDetails,
+				projectDetails,
+				deploymentFailed,
+				actionStatus: inputs.status,
+				runUrl,
+				updatedAtUtc
+			}),
+			deployFailure
+		};
+	}));
+	const nextRows = [];
+	const deploymentUrls = [];
+	const statusKeys = [];
+	let deployFailure;
+	for (const result of deploymentResults) {
+		appendBuiltDeploymentRowResult({
 			nextRows,
 			deploymentUrls,
-			statusKeys,
-			deployment,
-			deploymentUrl,
-			deploymentDetails,
-			projectDetails,
-			deploymentFailed,
-			actionStatus: inputs.status,
-			runUrl,
-			updatedAtUtc
-		});
+			statusKeys
+		}, result.deploymentResult);
+		deployFailure ??= result.deployFailure;
 	}
 	return {
 		nextRows,
@@ -18655,10 +18664,11 @@ async function buildCommentOnlyRows(inputs, runUrl, updatedAtUtc) {
 	for (const deployment of inputs.deployments) {
 		const deploymentUrl = deployment.deploymentUrl;
 		const { projectDetails, deploymentDetails } = await resolveDeploymentMetadata(inputs, deployment, deploymentUrl);
-		appendDeploymentRow({
+		appendBuiltDeploymentRowResult({
 			nextRows,
 			deploymentUrls,
-			statusKeys,
+			statusKeys
+		}, buildDeploymentRowResult({
 			deployment,
 			deploymentUrl,
 			deploymentDetails,
@@ -18667,7 +18677,7 @@ async function buildCommentOnlyRows(inputs, runUrl, updatedAtUtc) {
 			actionStatus: inputs.status,
 			runUrl,
 			updatedAtUtc
-		});
+		}));
 	}
 	return {
 		nextRows,
@@ -18695,24 +18705,31 @@ async function resolveDeploymentMetadata(inputs, deployment, deploymentUrl) {
 		}), inputs) : void 0
 	};
 }
-function appendDeploymentRow(options) {
+function buildDeploymentRowResult(options) {
 	const previewUrl = getPreviewUrl(options.deploymentUrl, options.deploymentDetails);
 	const status = resolveDisplayStatus({
 		vercelReadyState: options.deploymentDetails?.readyState,
 		actionStatus: options.deploymentFailed ? "failure" : options.actionStatus
 	});
-	options.nextRows.push({
-		environment: options.deployment.environment,
-		projectId: options.deployment.projectId,
-		projectName: getProjectName(options.deployment, options.projectDetails, options.deploymentDetails),
-		projectUrl: options.deployment.projectUrl,
+	return {
+		row: {
+			environment: options.deployment.environment,
+			projectId: options.deployment.projectId,
+			projectName: getProjectName(options.deployment, options.projectDetails, options.deploymentDetails),
+			projectUrl: options.deployment.projectUrl,
+			previewUrl,
+			runUrl: options.runUrl,
+			status,
+			updatedAtUtc: options.updatedAtUtc
+		},
 		previewUrl,
-		runUrl: options.runUrl,
-		status,
-		updatedAtUtc: options.updatedAtUtc
-	});
-	if (previewUrl) options.deploymentUrls.push(previewUrl);
-	options.statusKeys.push(status.key);
+		statusKey: status.key
+	};
+}
+function appendBuiltDeploymentRowResult(target, result) {
+	target.nextRows.push(result.row);
+	if (result.previewUrl) target.deploymentUrls.push(result.previewUrl);
+	target.statusKeys.push(result.statusKey);
 }
 function isDirectRun() {
 	return Boolean(process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href);

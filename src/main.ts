@@ -182,52 +182,74 @@ interface BuildRowsResult {
   deployFailure?: Error;
 }
 
+interface BuiltDeploymentRowResult {
+  row: DeploymentCommentRow;
+  previewUrl?: string;
+  statusKey: string;
+}
+
 async function buildDeployAndCommentRows(
   inputs: DeployAndCommentActionInputs,
   runUrl: string,
   updatedAtUtc: string,
 ): Promise<BuildRowsResult> {
+  const deploymentResults = await Promise.all(
+    inputs.deployments.map(async (deployment) => {
+      let deploymentUrl = deployment.deploymentUrl;
+      let deploymentFailed = false;
+      let deployFailure: Error | undefined;
+
+      try {
+        deploymentUrl = await runVercelDeploy({
+          deployment,
+          token: inputs.vercelToken,
+          exec,
+        });
+      } catch (error) {
+        deploymentFailed = true;
+        deployFailure = toError(error);
+        deploymentUrl = getDeploymentUrlFromError(error) ?? deploymentUrl;
+        core.warning(sanitizeErrorMessage(error, inputs));
+
+        if (!inputs.commentOnFailure) {
+          throw error;
+        }
+      }
+
+      const { projectDetails, deploymentDetails } =
+        await resolveDeploymentMetadata(inputs, deployment, deploymentUrl);
+
+      return {
+        deploymentResult: buildDeploymentRowResult({
+          deployment,
+          deploymentUrl,
+          deploymentDetails,
+          projectDetails,
+          deploymentFailed,
+          actionStatus: inputs.status,
+          runUrl,
+          updatedAtUtc,
+        }),
+        deployFailure,
+      };
+    }),
+  );
+
   const nextRows: DeploymentCommentRow[] = [];
   const deploymentUrls: string[] = [];
   const statusKeys: string[] = [];
   let deployFailure: Error | undefined;
 
-  for (const deployment of inputs.deployments) {
-    let deploymentUrl = deployment.deploymentUrl;
-    let deploymentFailed = false;
-
-    try {
-      deploymentUrl = await runVercelDeploy({
-        deployment,
-        token: inputs.vercelToken,
-        exec,
-      });
-    } catch (error) {
-      deploymentFailed = true;
-      deployFailure ??= toError(error);
-      deploymentUrl = getDeploymentUrlFromError(error) ?? deploymentUrl;
-      core.warning(sanitizeErrorMessage(error, inputs));
-
-      if (!inputs.commentOnFailure) {
-        throw error;
-      }
-    }
-
-    const { projectDetails, deploymentDetails } =
-      await resolveDeploymentMetadata(inputs, deployment, deploymentUrl);
-    appendDeploymentRow({
-      nextRows,
-      deploymentUrls,
-      statusKeys,
-      deployment,
-      deploymentUrl,
-      deploymentDetails,
-      projectDetails,
-      deploymentFailed,
-      actionStatus: inputs.status,
-      runUrl,
-      updatedAtUtc,
-    });
+  for (const result of deploymentResults) {
+    appendBuiltDeploymentRowResult(
+      {
+        nextRows,
+        deploymentUrls,
+        statusKeys,
+      },
+      result.deploymentResult,
+    );
+    deployFailure ??= result.deployFailure;
   }
 
   return {
@@ -251,19 +273,23 @@ async function buildCommentOnlyRows(
     const deploymentUrl = deployment.deploymentUrl;
     const { projectDetails, deploymentDetails } =
       await resolveDeploymentMetadata(inputs, deployment, deploymentUrl);
-    appendDeploymentRow({
-      nextRows,
-      deploymentUrls,
-      statusKeys,
-      deployment,
-      deploymentUrl,
-      deploymentDetails,
-      projectDetails,
-      deploymentFailed: false,
-      actionStatus: inputs.status,
-      runUrl,
-      updatedAtUtc,
-    });
+    appendBuiltDeploymentRowResult(
+      {
+        nextRows,
+        deploymentUrls,
+        statusKeys,
+      },
+      buildDeploymentRowResult({
+        deployment,
+        deploymentUrl,
+        deploymentDetails,
+        projectDetails,
+        deploymentFailed: false,
+        actionStatus: inputs.status,
+        runUrl,
+        updatedAtUtc,
+      }),
+    );
   }
 
   return {
@@ -320,10 +346,7 @@ async function resolveDeploymentMetadata(
   };
 }
 
-function appendDeploymentRow(options: {
-  nextRows: DeploymentCommentRow[];
-  deploymentUrls: string[];
-  statusKeys: string[];
+function buildDeploymentRowResult(options: {
   deployment: BaseDeploymentInput;
   deploymentUrl: string | undefined;
   deploymentDetails?: VercelDeploymentDetails;
@@ -332,7 +355,7 @@ function appendDeploymentRow(options: {
   actionStatus: ActionStatus;
   runUrl: string;
   updatedAtUtc: string;
-}): void {
+}): BuiltDeploymentRowResult {
   const previewUrl = getPreviewUrl(
     options.deploymentUrl,
     options.deploymentDetails,
@@ -342,26 +365,37 @@ function appendDeploymentRow(options: {
     actionStatus: options.deploymentFailed ? "failure" : options.actionStatus,
   });
 
-  options.nextRows.push({
-    environment: options.deployment.environment,
-    projectId: options.deployment.projectId,
-    projectName: getProjectName(
-      options.deployment,
-      options.projectDetails,
-      options.deploymentDetails,
-    ),
-    projectUrl: options.deployment.projectUrl,
+  return {
+    row: {
+      environment: options.deployment.environment,
+      projectId: options.deployment.projectId,
+      projectName: getProjectName(
+        options.deployment,
+        options.projectDetails,
+        options.deploymentDetails,
+      ),
+      projectUrl: options.deployment.projectUrl,
+      previewUrl,
+      runUrl: options.runUrl,
+      status,
+      updatedAtUtc: options.updatedAtUtc,
+    },
     previewUrl,
-    runUrl: options.runUrl,
-    status,
-    updatedAtUtc: options.updatedAtUtc,
-  });
+    statusKey: status.key,
+  };
+}
 
-  if (previewUrl) {
-    options.deploymentUrls.push(previewUrl);
+function appendBuiltDeploymentRowResult(
+  target: Pick<BuildRowsResult, "nextRows" | "deploymentUrls" | "statusKeys">,
+  result: BuiltDeploymentRowResult,
+): void {
+  target.nextRows.push(result.row);
+
+  if (result.previewUrl) {
+    target.deploymentUrls.push(result.previewUrl);
   }
 
-  options.statusKeys.push(status.key);
+  target.statusKeys.push(result.statusKey);
 }
 
 function isDirectRun(): boolean {

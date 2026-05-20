@@ -28,6 +28,7 @@ function validRawInputs(
     githubToken: "ghs_token",
     vercelToken: "vercel_token",
     mode: "deploy-and-comment",
+    deploymentConcurrency: "2",
     deployments: JSON.stringify([
       validDeployAndCommentDeployment,
     ]),
@@ -81,6 +82,9 @@ describe("parseActionInputs", () => {
       projectId: "prj_web",
       environment: "preview",
       projectUrl: "https://vercel.com/team/web",
+    });
+    expect(inputs).toMatchObject({
+      deploymentConcurrency: 2,
     });
     expect(inputs.commentMarker).toBe("preview:web");
     expect(inputs.commentOnFailure).toBe(true);
@@ -317,6 +321,13 @@ describe("parseActionInputs", () => {
         mode: 123 as unknown as string,
       },
       "mode must be a string",
+    ],
+    [
+      "deployment-concurrency",
+      {
+        deploymentConcurrency: 123 as unknown as string,
+      },
+      "deployment-concurrency must be a string",
     ],
     [
       "status",
@@ -584,6 +595,13 @@ describe("parseActionInputs", () => {
       "status must be one of",
     ],
     [
+      "invalid deployment concurrency",
+      {
+        deploymentConcurrency: "0",
+      },
+      "deployment-concurrency must be a positive integer",
+    ],
+    [
       "invalid booleans",
       {
         commentOnFailure: "yes",
@@ -658,6 +676,7 @@ describe("readActionInputs", () => {
 
     expect(inputs).toMatchObject({
       mode: "deploy-and-comment",
+      deploymentConcurrency: 2,
       header: "Vercel Preview Deployment",
       commentMarker: "default",
       status: "success",
@@ -665,6 +684,10 @@ describe("readActionInputs", () => {
     });
     expect(requests).toContainEqual({
       name: "github-token",
+      options: undefined,
+    });
+    expect(requests).toContainEqual({
+      name: "deployment-concurrency",
       options: undefined,
     });
     expect(requests).toContainEqual({

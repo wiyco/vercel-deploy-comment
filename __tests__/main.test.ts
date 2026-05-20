@@ -86,6 +86,7 @@ describe("run", () => {
       githubToken: "ghs_token",
       vercelToken: "vercel_token",
       mode: "deploy-and-comment",
+      deploymentConcurrency: 2,
       deployments: [
         {
           cwd: ".",
@@ -133,11 +134,13 @@ describe("run", () => {
   it("runs deployments in parallel and updates the comment once after all rows are ready", async () => {
     const webDeployment = createDeferred<string>();
     const adminDeployment = createDeferred<string>();
+    const docsDeployment = createDeferred<string>();
 
     readActionInputs.mockReturnValue({
       githubToken: "ghs_token",
       vercelToken: "vercel_token",
       mode: "deploy-and-comment",
+      deploymentConcurrency: 2,
       deployments: [
         {
           cwd: ".",
@@ -152,6 +155,13 @@ describe("run", () => {
           orgId: "team_123",
           projectId: "prj_admin",
           projectUrl: "https://vercel.com/team/admin",
+        },
+        {
+          cwd: "docs",
+          environment: "preview",
+          orgId: "team_123",
+          projectId: "prj_docs",
+          projectUrl: "https://vercel.com/team/docs",
         },
       ],
       header: "Preview",
@@ -172,7 +182,11 @@ describe("run", () => {
           return webDeployment.promise;
         }
 
-        return adminDeployment.promise;
+        if (deployment.projectId === "prj_admin") {
+          return adminDeployment.promise;
+        }
+
+        return docsDeployment.promise;
       },
     );
 
@@ -181,12 +195,27 @@ describe("run", () => {
     const runPromise = run();
 
     expect(runVercelDeploy).toHaveBeenCalledTimes(2);
+    expect(
+      runVercelDeploy.mock.calls.map(([arg]) => arg.deployment.projectId),
+    ).toEqual([
+      "prj_web",
+      "prj_admin",
+    ]);
 
     adminDeployment.resolve("https://admin-git-feature-team.vercel.app");
-    await Promise.resolve();
+    await vi.waitFor(() => {
+      expect(runVercelDeploy).toHaveBeenCalledTimes(3);
+    });
+    expect(runVercelDeploy.mock.calls[2]?.[0].deployment.projectId).toBe(
+      "prj_docs",
+    );
     expect(createPullRequestComment).not.toHaveBeenCalled();
 
     webDeployment.resolve("https://web-git-feature-team.vercel.app");
+    await Promise.resolve();
+    expect(createPullRequestComment).not.toHaveBeenCalled();
+
+    docsDeployment.resolve("https://docs-git-feature-team.vercel.app");
     await expect(runPromise).resolves.toBeUndefined();
 
     expect(createPullRequestComment).toHaveBeenCalledTimes(1);
@@ -195,18 +224,21 @@ describe("run", () => {
     expect(commentBody.indexOf("row:prj_web:preview")).toBeLessThan(
       commentBody.indexOf("row:prj_admin:preview"),
     );
-    expect(setOutput).toHaveBeenNthCalledWith(
-      3,
+    expect(commentBody.indexOf("row:prj_admin:preview")).toBeLessThan(
+      commentBody.indexOf("row:prj_docs:preview"),
+    );
+    expect(setOutput).toHaveBeenCalledWith(
       "deployment-urls",
       JSON.stringify([
         "https://web-git-feature-team.vercel.app",
         "https://admin-git-feature-team.vercel.app",
+        "https://docs-git-feature-team.vercel.app",
       ]),
     );
-    expect(setOutput).toHaveBeenNthCalledWith(
-      4,
+    expect(setOutput).toHaveBeenCalledWith(
       "statuses",
       JSON.stringify([
+        "ready",
         "ready",
         "ready",
       ]),

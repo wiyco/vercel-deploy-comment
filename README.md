@@ -168,6 +168,15 @@ Legacy `deployments[].command` and `deployments[].projectName` are no longer sup
       ]
 ```
 
+## Outputs
+
+| Output | Description |
+| :--- | :--- |
+| `comment-id` | ID of the created or updated pull request comment. |
+| `comment-url` | URL of the created or updated pull request comment. |
+| `deployment-urls` | JSON array of preview deployment URLs produced for the current `deployments` input, in input order with rows that resolved a preview URL. |
+| `statuses` | JSON array of normalized status keys produced for the current `deployments` input, in input order. Current values are `ready`, `failed`, `cancelled`, `skipped`, `in_progress`, and `unknown`. |
+
 ## Notes
 
 - The action stores one hidden comment marker for the whole comment and one hidden marker per row. Row updates are scoped to `projectId + environment`.

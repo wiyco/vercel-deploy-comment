@@ -51,9 +51,9 @@ outputs:
   comment-url:
     description: "URL of the created or updated pull request comment."
   deployment-urls:
-    description: "JSON array of preview deployment URLs included in the comment."
+    description: "JSON array of preview deployment URLs produced for the current deployments input, in input order with rows that have URLs."
   statuses:
-    description: "JSON array of normalized status keys included in the comment."
+    description: "JSON array of normalized status keys produced for the current deployments input, in input order."
 
 runs:
   using: node24

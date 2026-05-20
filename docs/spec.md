@@ -19,6 +19,15 @@ This action deploys one or more Vercel projects, or accepts existing deployment 
 | `status` | No | `success` | Fallback GitHub Actions status when Vercel deployment details are unavailable. |
 | `comment-on-failure` | No | `true` | Whether deploy failures still upsert the affected rows before the action fails. |
 
+### Outputs
+
+| Output | Description |
+| :--- | :--- |
+| `comment-id` | ID of the created or updated pull request comment. |
+| `comment-url` | URL of the created or updated pull request comment. |
+| `deployment-urls` | JSON array of preview deployment URLs produced for the current `deployments` input, in input order with rows that resolved a preview URL. This output does not include preserved rows from an existing managed comment. |
+| `statuses` | JSON array of normalized status keys produced for the current `deployments` input, in input order. Current values are `ready`, `failed`, `cancelled`, `skipped`, `in_progress`, and `unknown`. This output does not include preserved rows from an existing managed comment. |
+
 ### `deploy-and-comment` Entries
 
 Required fields:

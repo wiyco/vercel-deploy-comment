@@ -131,7 +131,7 @@ describe("run", () => {
     expect(setSecret).toHaveBeenNthCalledWith(2, "vercel_token");
   });
 
-  it("runs deployments in parallel and updates the comment once after all rows are ready", async () => {
+  it("runs deployments in parallel and updates the comment once after all rows are resolved", async () => {
     const webDeployment = createDeferred<string>();
     const adminDeployment = createDeferred<string>();
     const docsDeployment = createDeferred<string>();
@@ -241,6 +241,96 @@ describe("run", () => {
         "ready",
         "ready",
         "ready",
+      ]),
+    );
+  });
+
+  it("emits non-ready status keys for comment-only rows when Vercel readyState or fallback status differs", async () => {
+    readActionInputs.mockReturnValue({
+      githubToken: "ghs_token",
+      vercelToken: "vercel_token",
+      mode: "comment-only",
+      deployments: [
+        {
+          environment: "preview",
+          projectId: "prj_ready",
+          projectUrl: "https://vercel.com/team/ready",
+          deploymentUrl: "https://ready-git-feature-team.vercel.app",
+        },
+        {
+          environment: "preview",
+          projectId: "prj_failed",
+          projectUrl: "https://vercel.com/team/failed",
+          deploymentUrl: "https://failed-git-feature-team.vercel.app",
+        },
+        {
+          environment: "preview",
+          projectId: "prj_building",
+          projectUrl: "https://vercel.com/team/building",
+          deploymentUrl: "https://building-git-feature-team.vercel.app",
+        },
+        {
+          environment: "preview",
+          projectId: "prj_skipped",
+          projectUrl: "https://vercel.com/team/skipped",
+          deploymentUrl: "https://skipped-git-feature-team.vercel.app",
+        },
+        {
+          environment: "preview",
+          projectId: "prj_unknown",
+          projectUrl: "https://vercel.com/team/unknown",
+          deploymentUrl: "https://unknown-git-feature-team.vercel.app",
+        },
+      ],
+      header: "Preview",
+      footer: undefined,
+      commentMarker: "default",
+      status: "skipped",
+      commentOnFailure: false,
+    });
+    getVercelDeploymentDetails.mockImplementation(
+      async ({ deploymentUrl }: { deploymentUrl: string }) => {
+        if (deploymentUrl.includes("ready-")) {
+          return {
+            readyState: "READY",
+          };
+        }
+
+        if (deploymentUrl.includes("failed-")) {
+          return {
+            readyState: "ERROR",
+          };
+        }
+
+        if (deploymentUrl.includes("building-")) {
+          return {
+            readyState: "BUILDING",
+          };
+        }
+
+        if (deploymentUrl.includes("unknown-")) {
+          return {
+            readyState: "ALIEN",
+          };
+        }
+
+        return undefined;
+      },
+    );
+
+    const { run } = await import("../src/main");
+
+    await expect(run()).resolves.toBeUndefined();
+
+    expect(runVercelDeploy).not.toHaveBeenCalled();
+    expect(setOutput).toHaveBeenCalledWith(
+      "statuses",
+      JSON.stringify([
+        "ready",
+        "failed",
+        "in_progress",
+        "skipped",
+        "unknown",
       ]),
     );
   });

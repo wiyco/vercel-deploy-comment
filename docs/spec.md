@@ -11,6 +11,7 @@ This action deploys one or more Vercel projects, or accepts existing deployment 
 | `github-token` | No | Workflow `GITHUB_TOKEN` through `github.token` | GitHub token used only for REST API calls against pull request comments. |
 | `vercel-token` | Required for `deploy-and-comment` | None | Vercel token used for isolated CLI execution and Vercel API enrichment. Optional in `comment-only`. |
 | `mode` | No | `deploy-and-comment` | Either `deploy-and-comment` or `comment-only`. |
+| `deployment-concurrency` | No | `2` | Maximum number of `deploy-and-comment` entries to execute at once. |
 | `deployments` | Yes | None | Non-empty JSON array describing one or more project-driven deployment entries. |
 | `header` | No | `Vercel Preview Deployment` | Markdown heading text for the pull request comment. |
 | `footer` | No | None | Optional Markdown appended after the table. |
@@ -87,7 +88,11 @@ vercel deploy --prebuilt
 5. Build an explicit child-process environment for every Vercel CLI invocation, remove GitHub Actions `INPUT_*` variables, and attach the input token to authenticated CLI invocations through `VERCEL_TOKEN`, not command-line arguments.
 6. Preserve other caller-provided environment variables. This action does not attempt to scrub arbitrary non-`INPUT_*` secrets exported by the workflow.
 
-This design makes same-`cwd`, multi-project and multi-environment deployments safe because local `.vercel` state is not shared between rows.
+> [!NOTE]
+>
+> `deploy-and-comment` entries in one action invocation run in parallel up to `deployment-concurrency` at a time. After every row is ready, the action performs one managed comment create-or-update using the combined row set.
+>
+> This design makes same-`cwd`, multi-project and multi-environment deployments safe because local `.vercel` state is not shared between rows.
 
 ### Metadata Resolution
 
@@ -157,6 +162,7 @@ When updating the PR comment, the action:
 
 ### Concurrency
 
+- Parallel deployment entries inside one action invocation are safe because each row uses an isolated temp workspace, execution is bounded by `deployment-concurrency`, and the managed comment is written once after row assembly completes.
 - The managed comment update flow is a single read-modify-write cycle against the full comment body.
 - Concurrent jobs or workflow runs that share the same `comment-marker` are not safe. Two writers can both merge against stale snapshots, and the later PATCH can overwrite rows added by the earlier PATCH.
 - This action does not provide optimistic locking for comment updates. If multiple jobs need to contribute to one shared comment, serialize updates for that `comment-marker`, for example with `needs`, workflow or job `concurrency`, or a final aggregator job.
@@ -237,6 +243,7 @@ permissions:
 - Later runs with the same `comment-marker` update that comment.
 - Serialized jobs and workflow runs with the same `comment-marker` can add or replace independent rows in that same comment.
 - Same-`cwd` multi-project deployments do not share `.vercel/project.json`.
+- `deploy-and-comment` execution does not start more than `deployment-concurrency` rows at once.
 - Custom environments trigger the `Environment` column for all rows.
 - Deploy failures can still update the comment when `comment-on-failure` is `true`.
 - The implementation passes typecheck, lint, tests, and build.

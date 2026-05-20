@@ -17796,6 +17796,7 @@ function readActionInputs(reader = core_exports) {
 		githubToken: reader.getInput("github-token"),
 		vercelToken: reader.getInput("vercel-token"),
 		mode: reader.getInput("mode") || "deploy-and-comment",
+		deploymentConcurrency: reader.getInput("deployment-concurrency") || "2",
 		deployments: reader.getInput("deployments", { required: true }),
 		header: reader.getInput("header") || "Vercel Preview Deployment",
 		footer: reader.getInput("footer", { trimWhitespace: false }),
@@ -17820,8 +17821,10 @@ function parseActionInputs(raw) {
 	};
 	if (mode === "deploy-and-comment") {
 		if (!vercelToken) throw new InputError("vercel-token is required when mode is deploy-and-comment.");
+		const deploymentConcurrency = parsePositiveInteger(raw.deploymentConcurrency, "deployment-concurrency");
 		return {
 			...commonInputs,
+			deploymentConcurrency,
 			vercelToken,
 			mode,
 			deployments: parseDeployments(raw.deployments, mode)
@@ -17897,6 +17900,11 @@ function parseBoolean(value, field) {
 	if (normalized === "true") return true;
 	if (normalized === "false") return false;
 	throw new InputError(`${field} must be true or false.`);
+}
+function parsePositiveInteger(value, field) {
+	const normalized = requireString(value, field).trim();
+	if (!/^[1-9]\d*$/.test(normalized)) throw new InputError(`${field} must be a positive integer.`);
+	return Number.parseInt(normalized, 10);
 }
 function parseCommentMarker(value) {
 	const marker = requireNonEmpty(value, "comment-marker");
@@ -18389,6 +18397,37 @@ function stripLeadingSlash(value) {
 	return value.replace(/^\/+/, "");
 }
 //#endregion
+//#region src/shared/concurrency.ts
+async function mapWithConcurrencyLimit(items, concurrency, mapItem) {
+	if (!Number.isInteger(concurrency) || concurrency < 1) throw new Error("concurrency must be a positive integer.");
+	if (items.length === 0) return [];
+	const results = new Array(items.length);
+	const workerCount = Math.min(concurrency, items.length);
+	let nextIndex = 0;
+	let hasError = false;
+	let firstError;
+	async function runWorker() {
+		while (true) {
+			if (hasError) return;
+			const currentIndex = nextIndex;
+			if (currentIndex >= items.length) return;
+			nextIndex += 1;
+			try {
+				results[currentIndex] = await mapItem(items[currentIndex], currentIndex);
+			} catch (error) {
+				if (!hasError) {
+					hasError = true;
+					firstError = error;
+				}
+				return;
+			}
+		}
+	}
+	await Promise.all(Array.from({ length: workerCount }, () => runWorker()));
+	if (hasError) throw firstError;
+	return results;
+}
+//#endregion
 //#region src/vercel/deployment.ts
 const VERCEL_BINARY = "vercel";
 const EXCLUDED_WORKSPACE_ENTRY_NAMES = new Set([".git", ".vercel"]);
@@ -18606,13 +18645,11 @@ function toError(error) {
 	return error instanceof Error ? error : new Error(String(error));
 }
 async function buildDeployAndCommentRows(inputs, runUrl, updatedAtUtc) {
-	const nextRows = [];
-	const deploymentUrls = [];
-	const statusKeys = [];
-	let deployFailure;
-	for (const deployment of inputs.deployments) {
+	const deploymentResults = await mapWithConcurrencyLimit(inputs.deployments, inputs.deploymentConcurrency, async (deployment, index) => {
+		if (deployment === void 0) throw new Error(`deployments[${index}] is missing.`);
 		let deploymentUrl = deployment.deploymentUrl;
 		let deploymentFailed = false;
+		let deployFailure;
 		try {
 			deploymentUrl = await runVercelDeploy({
 				deployment,
@@ -18621,25 +18658,37 @@ async function buildDeployAndCommentRows(inputs, runUrl, updatedAtUtc) {
 			});
 		} catch (error) {
 			deploymentFailed = true;
-			deployFailure ??= toError(error);
+			deployFailure = toError(error);
 			deploymentUrl = getDeploymentUrlFromError(error) ?? deploymentUrl;
 			warning(sanitizeErrorMessage(error, inputs));
 			if (!inputs.commentOnFailure) throw error;
 		}
 		const { projectDetails, deploymentDetails } = await resolveDeploymentMetadata(inputs, deployment, deploymentUrl);
-		appendDeploymentRow({
+		return {
+			deploymentResult: buildDeploymentRowResult({
+				deployment,
+				deploymentUrl,
+				deploymentDetails,
+				projectDetails,
+				deploymentFailed,
+				actionStatus: inputs.status,
+				runUrl,
+				updatedAtUtc
+			}),
+			deployFailure
+		};
+	});
+	const nextRows = [];
+	const deploymentUrls = [];
+	const statusKeys = [];
+	let deployFailure;
+	for (const result of deploymentResults) {
+		appendBuiltDeploymentRowResult({
 			nextRows,
 			deploymentUrls,
-			statusKeys,
-			deployment,
-			deploymentUrl,
-			deploymentDetails,
-			projectDetails,
-			deploymentFailed,
-			actionStatus: inputs.status,
-			runUrl,
-			updatedAtUtc
-		});
+			statusKeys
+		}, result.deploymentResult);
+		deployFailure ??= result.deployFailure;
 	}
 	return {
 		nextRows,
@@ -18655,10 +18704,11 @@ async function buildCommentOnlyRows(inputs, runUrl, updatedAtUtc) {
 	for (const deployment of inputs.deployments) {
 		const deploymentUrl = deployment.deploymentUrl;
 		const { projectDetails, deploymentDetails } = await resolveDeploymentMetadata(inputs, deployment, deploymentUrl);
-		appendDeploymentRow({
+		appendBuiltDeploymentRowResult({
 			nextRows,
 			deploymentUrls,
-			statusKeys,
+			statusKeys
+		}, buildDeploymentRowResult({
 			deployment,
 			deploymentUrl,
 			deploymentDetails,
@@ -18667,7 +18717,7 @@ async function buildCommentOnlyRows(inputs, runUrl, updatedAtUtc) {
 			actionStatus: inputs.status,
 			runUrl,
 			updatedAtUtc
-		});
+		}));
 	}
 	return {
 		nextRows,
@@ -18695,24 +18745,31 @@ async function resolveDeploymentMetadata(inputs, deployment, deploymentUrl) {
 		}), inputs) : void 0
 	};
 }
-function appendDeploymentRow(options) {
+function buildDeploymentRowResult(options) {
 	const previewUrl = getPreviewUrl(options.deploymentUrl, options.deploymentDetails);
 	const status = resolveDisplayStatus({
 		vercelReadyState: options.deploymentDetails?.readyState,
 		actionStatus: options.deploymentFailed ? "failure" : options.actionStatus
 	});
-	options.nextRows.push({
-		environment: options.deployment.environment,
-		projectId: options.deployment.projectId,
-		projectName: getProjectName(options.deployment, options.projectDetails, options.deploymentDetails),
-		projectUrl: options.deployment.projectUrl,
+	return {
+		row: {
+			environment: options.deployment.environment,
+			projectId: options.deployment.projectId,
+			projectName: getProjectName(options.deployment, options.projectDetails, options.deploymentDetails),
+			projectUrl: options.deployment.projectUrl,
+			previewUrl,
+			runUrl: options.runUrl,
+			status,
+			updatedAtUtc: options.updatedAtUtc
+		},
 		previewUrl,
-		runUrl: options.runUrl,
-		status,
-		updatedAtUtc: options.updatedAtUtc
-	});
-	if (previewUrl) options.deploymentUrls.push(previewUrl);
-	options.statusKeys.push(status.key);
+		statusKey: status.key
+	};
+}
+function appendBuiltDeploymentRowResult(target, result) {
+	target.nextRows.push(result.row);
+	if (result.previewUrl) target.deploymentUrls.push(result.previewUrl);
+	target.statusKeys.push(result.statusKey);
 }
 function isDirectRun() {
 	return Boolean(process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href);

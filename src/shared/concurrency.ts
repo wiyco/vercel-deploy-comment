@@ -3,6 +3,10 @@ export async function mapWithConcurrencyLimit<TItem, TResult>(
   concurrency: number,
   mapItem: (item: TItem | undefined, index: number) => Promise<TResult>,
 ): Promise<TResult[]> {
+  if (!Number.isInteger(concurrency) || concurrency < 1) {
+    throw new Error("concurrency must be a positive integer.");
+  }
+
   if (items.length === 0) {
     return [];
   }

@@ -17796,6 +17796,7 @@ function readActionInputs(reader = core_exports) {
 		githubToken: reader.getInput("github-token"),
 		vercelToken: reader.getInput("vercel-token"),
 		mode: reader.getInput("mode") || "deploy-and-comment",
+		deploymentConcurrency: reader.getInput("deployment-concurrency") || "2",
 		deployments: reader.getInput("deployments", { required: true }),
 		header: reader.getInput("header") || "Vercel Preview Deployment",
 		footer: reader.getInput("footer", { trimWhitespace: false }),
@@ -17810,6 +17811,7 @@ function parseActionInputs(raw) {
 	const mode = parseEnum(raw.mode, MODES, "mode");
 	const status = parseEnum(raw.status, ACTION_STATUSES, "status");
 	const commentMarker = parseCommentMarker(raw.commentMarker);
+	const deploymentConcurrency = parsePositiveInteger(raw.deploymentConcurrency, "deployment-concurrency");
 	const commonInputs = {
 		githubToken,
 		header: requireNonEmpty(raw.header, "header").replace(/\r?\n/g, " "),
@@ -17822,6 +17824,7 @@ function parseActionInputs(raw) {
 		if (!vercelToken) throw new InputError("vercel-token is required when mode is deploy-and-comment.");
 		return {
 			...commonInputs,
+			deploymentConcurrency,
 			vercelToken,
 			mode,
 			deployments: parseDeployments(raw.deployments, mode)
@@ -17897,6 +17900,11 @@ function parseBoolean(value, field) {
 	if (normalized === "true") return true;
 	if (normalized === "false") return false;
 	throw new InputError(`${field} must be true or false.`);
+}
+function parsePositiveInteger(value, field) {
+	const normalized = requireString(value, field).trim();
+	if (!/^[1-9]\d*$/.test(normalized)) throw new InputError(`${field} must be a positive integer.`);
+	return Number.parseInt(normalized, 10);
 }
 function parseCommentMarker(value) {
 	const marker = requireNonEmpty(value, "comment-marker");
@@ -18605,8 +18613,34 @@ function sanitizeErrorMessage(error, inputs) {
 function toError(error) {
 	return error instanceof Error ? error : new Error(String(error));
 }
+async function mapWithConcurrencyLimit(items, concurrency, mapItem) {
+	if (items.length === 0) return [];
+	const results = new Array(items.length);
+	const workerCount = Math.min(concurrency, items.length);
+	let nextIndex = 0;
+	let firstError;
+	async function runWorker() {
+		while (true) {
+			if (firstError !== void 0) return;
+			const currentIndex = nextIndex;
+			if (currentIndex >= items.length) return;
+			nextIndex += 1;
+			try {
+				const item = items[currentIndex];
+				if (item === void 0) return;
+				results[currentIndex] = await mapItem(item, currentIndex);
+			} catch (error) {
+				firstError ??= error;
+				return;
+			}
+		}
+	}
+	await Promise.all(Array.from({ length: workerCount }, () => runWorker()));
+	if (firstError !== void 0) throw firstError;
+	return results;
+}
 async function buildDeployAndCommentRows(inputs, runUrl, updatedAtUtc) {
-	const deploymentResults = await Promise.all(inputs.deployments.map(async (deployment) => {
+	const deploymentResults = await mapWithConcurrencyLimit(inputs.deployments, inputs.deploymentConcurrency, async (deployment) => {
 		let deploymentUrl = deployment.deploymentUrl;
 		let deploymentFailed = false;
 		let deployFailure;
@@ -18637,7 +18671,7 @@ async function buildDeployAndCommentRows(inputs, runUrl, updatedAtUtc) {
 			}),
 			deployFailure
 		};
-	}));
+	});
 	const nextRows = [];
 	const deploymentUrls = [];
 	const statusKeys = [];

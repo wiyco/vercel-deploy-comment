@@ -9,6 +9,7 @@ const buildRunUrl = vi.fn(
 );
 const readGitHubRuntimeContext = vi.fn(() => ({
   apiUrl: "https://api.github.test",
+  graphqlUrl: "https://api.github.test/graphql",
   serverUrl: "https://github.test",
   owner: "acme",
   repo: "repo",

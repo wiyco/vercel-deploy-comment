@@ -18228,6 +18228,9 @@ const IN_PROGRESS_READY_STATES = new Set([
 	"INITIALIZING",
 	"ANALYZING"
 ]);
+function getInProgressDisplayStatus() {
+	return IN_PROGRESS;
+}
 function resolveDisplayStatus(options) {
 	const readyState = options.vercelReadyState?.trim().toUpperCase();
 	if (readyState) {
@@ -18310,6 +18313,9 @@ var GitHubClient = class {
 			action: "updated"
 		};
 	}
+	async deletePullRequestComment(commentId) {
+		await this.requestWithoutResponse(`/repos/${this.#context.owner}/${this.#context.repo}/issues/comments/${commentId}`, { method: "DELETE" });
+	}
 	async findExistingActionComment(hiddenMarker) {
 		const authenticatedLogin = await this.getAuthenticatedLogin();
 		for (let page = 1;; page += 1) {
@@ -18342,6 +18348,10 @@ var GitHubClient = class {
 		const url = new URL(stripLeadingSlash(path), ensureTrailingSlash(this.#context.apiUrl));
 		return this.#requestJson(url, init);
 	}
+	async requestWithoutResponse(path, init = {}) {
+		const url = new URL(stripLeadingSlash(path), ensureTrailingSlash(this.#context.apiUrl));
+		await this.#requestWithoutResponse(url, init);
+	}
 	async #listPullRequestCommentPage(page) {
 		return this.request(`/repos/${this.#context.owner}/${this.#context.repo}/issues/${this.#context.issueNumber}/comments?per_page=100&page=${page}`);
 	}
@@ -18360,7 +18370,18 @@ var GitHubClient = class {
 			headers: buildHeaders(this.#token, init.headers)
 		});
 		if (!response.ok) throw new GitHubApiError(`GitHub API request failed with status ${response.status} ${response.statusText}.`, response.status);
-		return await response.json();
+		const responseText = await response.text();
+		if (!responseText.trim()) throw new Error("GitHub API response body was empty.");
+		return JSON.parse(responseText);
+	}
+	async #requestWithoutResponse(url, init = {}) {
+		const response = await this.#fetch(url, {
+			...init,
+			headers: buildHeaders(this.#token, init.headers)
+		});
+		if (!response.ok) throw new GitHubApiError(`GitHub API request failed with status ${response.status} ${response.statusText}.`, response.status);
+		if (response.status === 204) return;
+		throw new Error(`GitHub API request expected status 204 No Content, but received ${response.status} ${response.statusText}.`);
 	}
 };
 function isActionComment(comment, hiddenMarker, authenticatedLogin) {
@@ -18585,25 +18606,35 @@ async function run() {
 		if (inputs.vercelToken) setSecret(inputs.vercelToken);
 		const context = readGitHubRuntimeContext();
 		const runUrl = buildRunUrl(context);
-		const updatedAtUtc = (/* @__PURE__ */ new Date()).toISOString();
-		const { nextRows, deploymentUrls, statusKeys, deployFailure } = inputs.mode === "deploy-and-comment" ? await buildDeployAndCommentRows(inputs, runUrl, updatedAtUtc) : await buildCommentOnlyRows(inputs, runUrl, updatedAtUtc);
 		const client = new GitHubClient(inputs.githubToken, context);
-		const commentMarker = buildCommentMarker(inputs.commentMarker);
-		const existingComment = await client.findExistingActionComment(commentMarker);
-		const rows = upsertDeploymentCommentRows(parseDeploymentCommentRows(existingComment?.body ?? ""), nextRows, inputs.deployments.map((deployment) => buildRowKey(deployment)));
-		const body = renderDeploymentComment({
-			header: inputs.header,
-			footer: inputs.footer,
-			marker: inputs.commentMarker,
-			rows
-		});
-		const comment = existingComment ? await client.updatePullRequestComment(existingComment.id, body) : await client.createPullRequestComment(body);
+		let pendingCommentRollbackState;
+		if (inputs.mode === "deploy-and-comment") {
+			const existingCommentSnapshot = await readManagedCommentSnapshot(client, inputs.commentMarker);
+			pendingCommentRollbackState = {
+				pendingCommentId: (await writeManagedCommentRows(client, inputs, buildInProgressRows(inputs.deployments, runUrl, (/* @__PURE__ */ new Date()).toISOString()), existingCommentSnapshot)).id,
+				previousComment: existingCommentSnapshot.comment
+			};
+		}
+		let buildRowsResult;
+		try {
+			buildRowsResult = inputs.mode === "deploy-and-comment" ? await buildDeployAndCommentRows(inputs, runUrl) : await buildCommentOnlyRows(inputs, runUrl);
+		} catch (error) {
+			await rollbackPendingCommentUpdate(client, pendingCommentRollbackState, inputs);
+			throw error;
+		}
+		let comment;
+		try {
+			comment = await writeManagedCommentRows(client, inputs, buildRowsResult.nextRows);
+		} catch (error) {
+			await rollbackPendingCommentUpdate(client, pendingCommentRollbackState, inputs);
+			throw error;
+		}
 		setOutput("comment-id", String(comment.id));
 		setOutput("comment-url", comment.htmlUrl);
-		setOutput("deployment-urls", JSON.stringify(deploymentUrls));
-		setOutput("statuses", JSON.stringify(statusKeys));
+		setOutput("deployment-urls", JSON.stringify(buildRowsResult.deploymentUrls));
+		setOutput("statuses", JSON.stringify(buildRowsResult.statusKeys));
 		info(`Pull request comment ${comment.action}: ${comment.htmlUrl}`);
-		if (deployFailure) throw deployFailure;
+		if (buildRowsResult.deployFailure) throw buildRowsResult.deployFailure;
 	} catch (error) {
 		throw new Error(sanitizeErrorMessage(error, inputs), { cause: toError(error) });
 	}
@@ -18644,7 +18675,7 @@ function sanitizeErrorMessage(error, inputs) {
 function toError(error) {
 	return error instanceof Error ? error : new Error(String(error));
 }
-async function buildDeployAndCommentRows(inputs, runUrl, updatedAtUtc) {
+async function buildDeployAndCommentRows(inputs, runUrl) {
 	const deploymentResults = await mapWithConcurrencyLimit(inputs.deployments, inputs.deploymentConcurrency, async (deployment, index) => {
 		if (deployment === void 0) throw new Error(`deployments[${index}] is missing.`);
 		let deploymentUrl = deployment.deploymentUrl;
@@ -18665,19 +18696,15 @@ async function buildDeployAndCommentRows(inputs, runUrl, updatedAtUtc) {
 		}
 		const { projectDetails, deploymentDetails } = await resolveDeploymentMetadata(inputs, deployment, deploymentUrl);
 		return {
-			deploymentResult: buildDeploymentRowResult({
-				deployment,
-				deploymentUrl,
-				deploymentDetails,
-				projectDetails,
-				deploymentFailed,
-				actionStatus: inputs.status,
-				runUrl,
-				updatedAtUtc
-			}),
+			deployment,
+			deploymentUrl,
+			deploymentDetails,
+			projectDetails,
+			deploymentFailed,
 			deployFailure
 		};
 	});
+	const updatedAtUtc = (/* @__PURE__ */ new Date()).toISOString();
 	const nextRows = [];
 	const deploymentUrls = [];
 	const statusKeys = [];
@@ -18687,7 +18714,16 @@ async function buildDeployAndCommentRows(inputs, runUrl, updatedAtUtc) {
 			nextRows,
 			deploymentUrls,
 			statusKeys
-		}, result.deploymentResult);
+		}, buildDeploymentRowResult({
+			deployment: result.deployment,
+			deploymentUrl: result.deploymentUrl,
+			deploymentDetails: result.deploymentDetails,
+			projectDetails: result.projectDetails,
+			deploymentFailed: result.deploymentFailed,
+			actionStatus: inputs.status,
+			runUrl,
+			updatedAtUtc
+		}));
 		deployFailure ??= result.deployFailure;
 	}
 	return {
@@ -18697,7 +18733,8 @@ async function buildDeployAndCommentRows(inputs, runUrl, updatedAtUtc) {
 		deployFailure
 	};
 }
-async function buildCommentOnlyRows(inputs, runUrl, updatedAtUtc) {
+async function buildCommentOnlyRows(inputs, runUrl) {
+	const updatedAtUtc = (/* @__PURE__ */ new Date()).toISOString();
 	const nextRows = [];
 	const deploymentUrls = [];
 	const statusKeys = [];
@@ -18766,10 +18803,57 @@ function buildDeploymentRowResult(options) {
 		statusKey: status.key
 	};
 }
+function buildInProgressRows(deployments, runUrl, updatedAtUtc) {
+	const status = getInProgressDisplayStatus();
+	return deployments.map((deployment) => ({
+		environment: deployment.environment,
+		projectId: deployment.projectId,
+		projectName: getProjectName(deployment, void 0, void 0),
+		projectUrl: deployment.projectUrl,
+		previewUrl: deployment.deploymentUrl,
+		runUrl,
+		status,
+		updatedAtUtc
+	}));
+}
 function appendBuiltDeploymentRowResult(target, result) {
 	target.nextRows.push(result.row);
 	if (result.previewUrl) target.deploymentUrls.push(result.previewUrl);
 	target.statusKeys.push(result.statusKey);
+}
+async function readManagedCommentSnapshot(client, commentMarker) {
+	const comment = await client.findExistingActionComment(buildCommentMarker(commentMarker));
+	return {
+		comment,
+		rows: parseDeploymentCommentRows(comment?.body ?? "")
+	};
+}
+async function writeManagedCommentRows(client, inputs, nextRows, snapshot) {
+	const existingCommentSnapshot = snapshot ?? await readManagedCommentSnapshot(client, inputs.commentMarker);
+	const body = renderManagedCommentBody(inputs, existingCommentSnapshot.rows, nextRows);
+	if (existingCommentSnapshot.comment) return client.updatePullRequestComment(existingCommentSnapshot.comment.id, body);
+	return client.createPullRequestComment(body);
+}
+function renderManagedCommentBody(inputs, existingRows, nextRows) {
+	const rows = upsertDeploymentCommentRows(existingRows, nextRows, inputs.deployments.map((deployment) => buildRowKey(deployment)));
+	return renderDeploymentComment({
+		header: inputs.header,
+		footer: inputs.footer,
+		marker: inputs.commentMarker,
+		rows
+	});
+}
+async function rollbackPendingCommentUpdate(client, rollbackState, inputs) {
+	if (!rollbackState) return;
+	try {
+		if (rollbackState.previousComment) {
+			await client.updatePullRequestComment(rollbackState.previousComment.id, rollbackState.previousComment.body ?? "");
+			return;
+		}
+		await client.deletePullRequestComment(rollbackState.pendingCommentId);
+	} catch (error) {
+		warning(`Failed to rollback pending pull request comment update: ${sanitizeErrorMessage(error, inputs)}`);
+	}
 }
 function isDirectRun() {
 	return Boolean(process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href);

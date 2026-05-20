@@ -96,7 +96,7 @@ For each `deploy-and-comment` entry, the action:
 
 > [!NOTE]
 >
-> Multiple `deploy-and-comment` entries within one action invocation run in parallel up to `deployment-concurrency` at a time, and the managed PR comment is created or updated once after all rows are ready. Each row uses an isolated temp workspace, so repo-local `.vercel` state is not shared across projects or environments, including multiple rows that point at the same source `cwd`.
+> Multiple `deploy-and-comment` entries within one action invocation run in parallel up to `deployment-concurrency` at a time. Before the deploys start, the managed PR comment is upserted with `In Progress` rows for the current input, and after all rows are ready it is updated again with the final statuses. Each row uses an isolated temp workspace, so repo-local `.vercel` state is not shared across projects or environments, including multiple rows that point at the same source `cwd`.
 
 The action strips GitHub Actions `INPUT_*` variables from all Vercel CLI child processes and passes `vercel-token` to authenticated steps through `VERCEL_TOKEN`, so action input secrets do not appear in command-line arguments or in the local build step's environment. Other workflow-managed secrets still remain visible to `vercel build` if the workflow exports them through non-`INPUT_*` environment variables.
 
@@ -115,7 +115,7 @@ Top-level inputs:
 | `footer` | No | Optional Markdown appended below the table. | - |
 | `comment-marker` | No | Stable key for the managed PR comment. | `default` |
 | `status` | No | Fallback action status when Vercel deployment details are unavailable. | `success` |
-| `comment-on-failure` | No | When `true`, failed deploy rows are still upserted before the action fails. | `true` |
+| `comment-on-failure` | No | When `true`, failed deploy rows replace the temporary `In Progress` rows before the action fails. | `true` |
 
 `deploy-and-comment` entries:
 

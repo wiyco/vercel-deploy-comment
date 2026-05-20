@@ -26,6 +26,7 @@ export function readActionInputs(reader: RawInputReader = core): ActionInputs {
     githubToken: reader.getInput("github-token"),
     vercelToken: reader.getInput("vercel-token"),
     mode: reader.getInput("mode") || "deploy-and-comment",
+    deploymentConcurrency: reader.getInput("deployment-concurrency") || "2",
     deployments: reader.getInput("deployments", {
       required: true,
     }),
@@ -43,6 +44,7 @@ export interface RawActionInputs {
   githubToken: string;
   vercelToken?: string;
   mode: string;
+  deploymentConcurrency: string;
   deployments: string;
   header: string;
   footer?: string;
@@ -57,6 +59,10 @@ export function parseActionInputs(raw: RawActionInputs): ActionInputs {
   const mode = parseEnum(raw.mode, MODES, "mode");
   const status = parseEnum(raw.status, ACTION_STATUSES, "status");
   const commentMarker = parseCommentMarker(raw.commentMarker);
+  const deploymentConcurrency = parsePositiveInteger(
+    raw.deploymentConcurrency,
+    "deployment-concurrency",
+  );
   const header = requireNonEmpty(raw.header, "header").replace(/\r?\n/g, " ");
   const footer = optionalString(raw.footer, "footer");
   const commentOnFailure = parseBoolean(
@@ -82,6 +88,7 @@ export function parseActionInputs(raw: RawActionInputs): ActionInputs {
 
     return {
       ...commonInputs,
+      deploymentConcurrency,
       vercelToken,
       mode,
       deployments: parseDeployments(raw.deployments, mode),
@@ -240,6 +247,16 @@ function parseBoolean(value: unknown, field: string): boolean {
   }
 
   throw new InputError(`${field} must be true or false.`);
+}
+
+function parsePositiveInteger(value: unknown, field: string): number {
+  const normalized = requireString(value, field).trim();
+
+  if (!/^[1-9]\d*$/.test(normalized)) {
+    throw new InputError(`${field} must be a positive integer.`);
+  }
+
+  return Number.parseInt(normalized, 10);
 }
 
 function parseCommentMarker(value: string): string {

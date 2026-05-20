@@ -188,13 +188,74 @@ interface BuiltDeploymentRowResult {
   statusKey: string;
 }
 
+async function mapWithConcurrencyLimit<TItem, TResult>(
+  items: readonly TItem[],
+  concurrency: number,
+  mapItem: (item: TItem, index: number) => Promise<TResult>,
+): Promise<TResult[]> {
+  if (items.length === 0) {
+    return [];
+  }
+
+  const results = new Array<TResult>(items.length);
+  const workerCount = Math.min(concurrency, items.length);
+  let nextIndex = 0;
+  let firstError: unknown;
+
+  async function runWorker(): Promise<void> {
+    while (true) {
+      if (firstError !== undefined) {
+        return;
+      }
+
+      const currentIndex = nextIndex;
+
+      if (currentIndex >= items.length) {
+        return;
+      }
+
+      nextIndex += 1;
+
+      try {
+        const item = items[currentIndex];
+
+        if (item === undefined) {
+          return;
+        }
+
+        results[currentIndex] = await mapItem(item, currentIndex);
+      } catch (error) {
+        firstError ??= error;
+        return;
+      }
+    }
+  }
+
+  await Promise.all(
+    Array.from(
+      {
+        length: workerCount,
+      },
+      () => runWorker(),
+    ),
+  );
+
+  if (firstError !== undefined) {
+    throw firstError;
+  }
+
+  return results;
+}
+
 async function buildDeployAndCommentRows(
   inputs: DeployAndCommentActionInputs,
   runUrl: string,
   updatedAtUtc: string,
 ): Promise<BuildRowsResult> {
-  const deploymentResults = await Promise.all(
-    inputs.deployments.map(async (deployment) => {
+  const deploymentResults = await mapWithConcurrencyLimit(
+    inputs.deployments,
+    inputs.deploymentConcurrency,
+    async (deployment) => {
       let deploymentUrl = deployment.deploymentUrl;
       let deploymentFailed = false;
       let deployFailure: Error | undefined;
@@ -232,7 +293,7 @@ async function buildDeployAndCommentRows(
         }),
         deployFailure,
       };
-    }),
+    },
   );
 
   const nextRows: DeploymentCommentRow[] = [];

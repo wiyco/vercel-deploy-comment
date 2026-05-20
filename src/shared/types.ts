@@ -45,6 +45,7 @@ export interface BaseActionInputs {
 }
 
 export interface DeployAndCommentActionInputs extends BaseActionInputs {
+  deploymentConcurrency: number;
   vercelToken: string;
   mode: "deploy-and-comment";
   deployments: DeployAndCommentDeploymentInput[];

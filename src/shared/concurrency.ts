@@ -1,7 +1,7 @@
 export async function mapWithConcurrencyLimit<TItem, TResult>(
-  items: readonly TItem[],
+  items: readonly (TItem | undefined)[],
   concurrency: number,
-  mapItem: (item: TItem, index: number) => Promise<TResult>,
+  mapItem: (item: TItem | undefined, index: number) => Promise<TResult>,
 ): Promise<TResult[]> {
   if (items.length === 0) {
     return [];
@@ -29,7 +29,7 @@ export async function mapWithConcurrencyLimit<TItem, TResult>(
 
       try {
         results[currentIndex] = await mapItem(
-          items[currentIndex] as TItem,
+          items[currentIndex],
           currentIndex,
         );
       } catch (error) {

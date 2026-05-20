@@ -59,10 +59,6 @@ export function parseActionInputs(raw: RawActionInputs): ActionInputs {
   const mode = parseEnum(raw.mode, MODES, "mode");
   const status = parseEnum(raw.status, ACTION_STATUSES, "status");
   const commentMarker = parseCommentMarker(raw.commentMarker);
-  const deploymentConcurrency = parsePositiveInteger(
-    raw.deploymentConcurrency,
-    "deployment-concurrency",
-  );
   const header = requireNonEmpty(raw.header, "header").replace(/\r?\n/g, " ");
   const footer = optionalString(raw.footer, "footer");
   const commentOnFailure = parseBoolean(
@@ -85,6 +81,11 @@ export function parseActionInputs(raw: RawActionInputs): ActionInputs {
         "vercel-token is required when mode is deploy-and-comment.",
       );
     }
+
+    const deploymentConcurrency = parsePositiveInteger(
+      raw.deploymentConcurrency,
+      "deployment-concurrency",
+    );
 
     return {
       ...commonInputs,

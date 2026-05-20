@@ -197,7 +197,11 @@ async function buildDeployAndCommentRows(
   const deploymentResults = await mapWithConcurrencyLimit(
     inputs.deployments,
     inputs.deploymentConcurrency,
-    async (deployment) => {
+    async (deployment, index) => {
+      if (deployment === undefined) {
+        throw new Error(`deployments[${index}] is missing.`);
+      }
+
       let deploymentUrl = deployment.deploymentUrl;
       let deploymentFailed = false;
       let deployFailure: Error | undefined;

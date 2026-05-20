@@ -103,9 +103,9 @@ Preview URL and deployment status are resolved from the deployment URL plus Verc
 
 ### External API Usage
 
-GitHub REST API:
+GitHub API:
 
-- `GET /user` to resolve the authenticated login used to identify the managed comment. See [Get the authenticated user](https://docs.github.com/en/rest/users/users#get-the-authenticated-user).
+- `POST /graphql` with `viewer { login }` to resolve the authenticated login used to identify the managed comment. See [Authenticating as a GitHub App installation](https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/authenticating-as-a-github-app-installation).
 - `GET /repos/{owner}/{repo}/issues/{issue_number}/comments` to scan pull request conversation comments for the existing managed comment. See [List issue comments](https://docs.github.com/en/rest/issues/comments#list-issue-comments).
 - `POST /repos/{owner}/{repo}/issues/{issue_number}/comments` to create the managed pull request comment. See [Create an issue comment](https://docs.github.com/en/rest/issues/comments#create-an-issue-comment).
 - `PATCH /repos/{owner}/{repo}/issues/comments/{comment_id}` to update the managed pull request comment. See [Update an issue comment](https://docs.github.com/en/rest/issues/comments#update-an-issue-comment).

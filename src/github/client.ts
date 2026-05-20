@@ -5,6 +5,7 @@ type EventFileReader = (path: string, encoding: BufferEncoding) => string;
 
 export interface GitHubRuntimeContext {
   apiUrl: string;
+  graphqlUrl: string;
   serverUrl: string;
   owner: string;
   repo: string;
@@ -18,8 +19,17 @@ interface PullRequestEventPayload {
   };
 }
 
-interface GitHubUser {
-  login: string;
+interface GraphQLResponse<T> {
+  data?: T;
+  errors?: Array<{
+    message?: string;
+  }>;
+}
+
+interface ViewerQueryResult {
+  viewer?: {
+    login?: string;
+  };
 }
 
 export interface IssueComment {
@@ -70,6 +80,9 @@ export function readGitHubRuntimeContext(
 
   return {
     apiUrl: env.GITHUB_API_URL || "https://api.github.com",
+    graphqlUrl:
+      env.GITHUB_GRAPHQL_URL ||
+      deriveGraphqlUrl(env.GITHUB_API_URL || "https://api.github.com"),
     serverUrl: env.GITHUB_SERVER_URL || "https://github.com",
     owner,
     repo,
@@ -190,9 +203,21 @@ export class GitHubClient {
       return this.#authenticatedLogin;
     }
 
-    const user = await this.request<GitHubUser>("/user");
-    this.#authenticatedLogin = user.login;
-    return user.login;
+    const response = await this.graphqlRequest<ViewerQueryResult>(
+      `query ViewerLogin {
+        viewer {
+          login
+        }
+      }`,
+    );
+    const login = response.viewer?.login;
+
+    if (!login) {
+      throw new Error("GitHub GraphQL response did not include viewer.login.");
+    }
+
+    this.#authenticatedLogin = login;
+    return login;
   }
 
   async request<T>(path: string, init: RequestInit = {}): Promise<T> {
@@ -200,16 +225,45 @@ export class GitHubClient {
       stripLeadingSlash(path),
       ensureTrailingSlash(this.#context.apiUrl),
     );
-    const headers = new Headers(init.headers);
-    headers.set("Accept", "application/vnd.github+json");
-    headers.set("Authorization", `Bearer ${this.#token}`);
-    headers.set("Content-Type", "application/json");
-    headers.set("User-Agent", "vercel-deploy-comment");
-    headers.set("X-GitHub-Api-Version", "2022-11-28");
+    return this.#requestJson<T>(url, init);
+  }
 
+  async #listPullRequestCommentPage(page: number): Promise<IssueComment[]> {
+    return this.request<IssueComment[]>(
+      `/repos/${this.#context.owner}/${this.#context.repo}/issues/${this.#context.issueNumber}/comments?per_page=100&page=${page}`,
+    );
+  }
+
+  async graphqlRequest<T>(query: string): Promise<T> {
+    const response = await this.#requestJson<GraphQLResponse<T>>(
+      new URL(this.#context.graphqlUrl),
+      {
+        method: "POST",
+        body: JSON.stringify({
+          query,
+        }),
+      },
+    );
+
+    if (response.errors?.length) {
+      throw new Error(
+        response.errors
+          .map((error) => error.message || "GitHub GraphQL request failed.")
+          .join("; "),
+      );
+    }
+
+    if (!response.data) {
+      throw new Error("GitHub GraphQL response did not include data.");
+    }
+
+    return response.data;
+  }
+
+  async #requestJson<T>(url: URL, init: RequestInit = {}): Promise<T> {
     const response = await this.#fetch(url, {
       ...init,
-      headers,
+      headers: buildHeaders(this.#token, init.headers),
     });
 
     if (!response.ok) {
@@ -220,12 +274,6 @@ export class GitHubClient {
     }
 
     return (await response.json()) as T;
-  }
-
-  async #listPullRequestCommentPage(page: number): Promise<IssueComment[]> {
-    return this.request<IssueComment[]>(
-      `/repos/${this.#context.owner}/${this.#context.repo}/issues/${this.#context.issueNumber}/comments?per_page=100&page=${page}`,
-    );
   }
 }
 
@@ -248,6 +296,36 @@ function requireEnv(env: NodeJS.ProcessEnv, name: string): string {
   }
 
   return value;
+}
+
+function buildHeaders(
+  token: string,
+  initHeaders?: RequestInit["headers"],
+): Headers {
+  const headers = new Headers(initHeaders);
+  headers.set("Accept", "application/vnd.github+json");
+  headers.set("Authorization", `Bearer ${token}`);
+  headers.set("Content-Type", "application/json");
+  headers.set("User-Agent", "vercel-deploy-comment");
+  headers.set("X-GitHub-Api-Version", "2022-11-28");
+  return headers;
+}
+
+function deriveGraphqlUrl(apiUrl: string): string {
+  const url = new URL(apiUrl);
+  const pathname = url.pathname.replace(/\/+$/, "");
+
+  if (!pathname) {
+    url.pathname = "/graphql";
+  } else if (pathname.endsWith("/api/v3")) {
+    url.pathname = `${pathname.slice(0, -"/v3".length)}/graphql`;
+  } else {
+    url.pathname = `${pathname}/graphql`;
+  }
+
+  url.search = "";
+  url.hash = "";
+  return url.toString();
 }
 
 function ensureTrailingSlash(value: string): string {

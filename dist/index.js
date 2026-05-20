@@ -18254,6 +18254,7 @@ function readGitHubRuntimeContext(env = process.env, readFile = (path, encoding)
 	if (typeof issueNumber !== "number" || !Number.isInteger(issueNumber)) throw new Error("This action must run on a pull request event.");
 	return {
 		apiUrl: env.GITHUB_API_URL || "https://api.github.com",
+		graphqlUrl: env.GITHUB_GRAPHQL_URL || deriveGraphqlUrl(env.GITHUB_API_URL || "https://api.github.com"),
 		serverUrl: env.GITHUB_SERVER_URL || "https://github.com",
 		owner,
 		repo,
@@ -18320,27 +18321,38 @@ var GitHubClient = class {
 	}
 	async getAuthenticatedLogin() {
 		if (this.#authenticatedLogin) return this.#authenticatedLogin;
-		const user = await this.request("/user");
-		this.#authenticatedLogin = user.login;
-		return user.login;
+		const login = (await this.graphqlRequest(`query ViewerLogin {
+        viewer {
+          login
+        }
+      }`)).viewer?.login;
+		if (!login) throw new Error("GitHub GraphQL response did not include viewer.login.");
+		this.#authenticatedLogin = login;
+		return login;
 	}
 	async request(path, init = {}) {
 		const url = new URL(stripLeadingSlash(path), ensureTrailingSlash(this.#context.apiUrl));
-		const headers = new Headers(init.headers);
-		headers.set("Accept", "application/vnd.github+json");
-		headers.set("Authorization", `Bearer ${this.#token}`);
-		headers.set("Content-Type", "application/json");
-		headers.set("User-Agent", "vercel-deploy-comment");
-		headers.set("X-GitHub-Api-Version", "2022-11-28");
-		const response = await this.#fetch(url, {
-			...init,
-			headers
-		});
-		if (!response.ok) throw new GitHubApiError(`GitHub API request failed with status ${response.status} ${response.statusText}.`, response.status);
-		return await response.json();
+		return this.#requestJson(url, init);
 	}
 	async #listPullRequestCommentPage(page) {
 		return this.request(`/repos/${this.#context.owner}/${this.#context.repo}/issues/${this.#context.issueNumber}/comments?per_page=100&page=${page}`);
+	}
+	async graphqlRequest(query) {
+		const response = await this.#requestJson(new URL(this.#context.graphqlUrl), {
+			method: "POST",
+			body: JSON.stringify({ query })
+		});
+		if (response.errors?.length) throw new Error(response.errors.map((error) => error.message || "GitHub GraphQL request failed.").join("; "));
+		if (!response.data) throw new Error("GitHub GraphQL response did not include data.");
+		return response.data;
+	}
+	async #requestJson(url, init = {}) {
+		const response = await this.#fetch(url, {
+			...init,
+			headers: buildHeaders(this.#token, init.headers)
+		});
+		if (!response.ok) throw new GitHubApiError(`GitHub API request failed with status ${response.status} ${response.statusText}.`, response.status);
+		return await response.json();
 	}
 };
 function isActionComment(comment, hiddenMarker, authenticatedLogin) {
@@ -18350,6 +18362,25 @@ function requireEnv(env, name) {
 	const value = env[name];
 	if (!value) throw new Error(`${name} is required.`);
 	return value;
+}
+function buildHeaders(token, initHeaders) {
+	const headers = new Headers(initHeaders);
+	headers.set("Accept", "application/vnd.github+json");
+	headers.set("Authorization", `Bearer ${token}`);
+	headers.set("Content-Type", "application/json");
+	headers.set("User-Agent", "vercel-deploy-comment");
+	headers.set("X-GitHub-Api-Version", "2022-11-28");
+	return headers;
+}
+function deriveGraphqlUrl(apiUrl) {
+	const url = new URL(apiUrl);
+	const pathname = url.pathname.replace(/\/+$/, "");
+	if (!pathname) url.pathname = "/graphql";
+	else if (pathname.endsWith("/api/v3")) url.pathname = `${pathname.slice(0, -3)}/graphql`;
+	else url.pathname = `${pathname}/graphql`;
+	url.search = "";
+	url.hash = "";
+	return url.toString();
 }
 function ensureTrailingSlash(value) {
 	return value.endsWith("/") ? value : `${value}/`;

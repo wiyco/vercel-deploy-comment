@@ -402,6 +402,21 @@ describe("parseActionInputs", () => {
     });
   });
 
+  it("ignores invalid deployment concurrency in comment-only mode", () => {
+    const inputs = parseActionInputs(
+      validRawInputs({
+        mode: "comment-only",
+        deploymentConcurrency: "0",
+        deployments: JSON.stringify([
+          validCommentOnlyDeployment,
+        ]),
+      }),
+    );
+
+    expect(inputs.mode).toBe("comment-only");
+    expect("deploymentConcurrency" in inputs).toBe(false);
+  });
+
   it.each([
     [
       "deploy-and-comment",

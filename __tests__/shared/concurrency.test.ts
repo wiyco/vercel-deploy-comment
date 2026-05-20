@@ -22,9 +22,13 @@ function createDeferred<T>(): {
 
 describe("mapWithConcurrencyLimit", () => {
   it("returns an empty array when no items are provided", async () => {
-    const mapItem = vi.fn(async (item: string) => item);
+    const mapItem = vi.fn(
+      async (item: string | undefined) => item ?? "missing",
+    );
 
-    await expect(mapWithConcurrencyLimit([], 1, mapItem)).resolves.toEqual([]);
+    await expect(
+      mapWithConcurrencyLimit<string, string>([], 1, mapItem),
+    ).resolves.toEqual([]);
     expect(mapItem).not.toHaveBeenCalled();
   });
 
@@ -86,7 +90,7 @@ describe("mapWithConcurrencyLimit", () => {
             throw undefined;
           }
 
-          return item;
+          return item ?? "missing";
         },
       ),
     ).rejects.toBeUndefined();
@@ -94,7 +98,7 @@ describe("mapWithConcurrencyLimit", () => {
 
   it("stops scheduling more items after another worker fails", async () => {
     const slowItem = createDeferred<string>();
-    const mapItem = vi.fn(async (item: string) => {
+    const mapItem = vi.fn(async (item: string | undefined) => {
       if (item === "fail") {
         throw new Error("boom");
       }
@@ -103,7 +107,7 @@ describe("mapWithConcurrencyLimit", () => {
         return slowItem.promise;
       }
 
-      return `${item}-done`;
+      return `${item ?? "missing"}-done`;
     });
 
     const runPromise = mapWithConcurrencyLimit(
@@ -131,7 +135,7 @@ describe("mapWithConcurrencyLimit", () => {
   it("keeps the first error when multiple workers fail", async () => {
     const firstFailure = createDeferred<never>();
     const secondFailure = createDeferred<never>();
-    const mapItem = vi.fn(async (item: string) => {
+    const mapItem = vi.fn(async (item: string | undefined) => {
       if (item === "first") {
         return firstFailure.promise;
       }

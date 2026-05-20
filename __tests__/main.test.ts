@@ -22,13 +22,13 @@ const readGitHubRuntimeContext = vi.fn(() => ({
 const findExistingActionComment = vi.fn();
 const createPullRequestComment = vi.fn();
 const updatePullRequestComment = vi.fn();
-const GitHubClient = vi.fn(
-  class {
-    createPullRequestComment = createPullRequestComment;
-    findExistingActionComment = findExistingActionComment;
-    updatePullRequestComment = updatePullRequestComment;
-  },
-);
+const GitHubClient = vi.fn().mockImplementation(function MockGitHubClient() {
+  return {
+    createPullRequestComment,
+    findExistingActionComment,
+    updatePullRequestComment,
+  };
+});
 const getVercelDeploymentDetails = vi.fn();
 const getVercelProjectDetails = vi.fn();
 const runVercelDeploy = vi.fn();

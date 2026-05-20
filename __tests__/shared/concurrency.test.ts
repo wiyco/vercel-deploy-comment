@@ -21,6 +21,27 @@ function createDeferred<T>(): {
 }
 
 describe("mapWithConcurrencyLimit", () => {
+  it.each([
+    0,
+    Number.NaN,
+    1.5,
+  ])("rejects invalid concurrency %s", async (concurrency) => {
+    const mapItem = vi.fn(
+      async (item: string | undefined) => item ?? "missing",
+    );
+
+    await expect(
+      mapWithConcurrencyLimit(
+        [
+          "web",
+        ],
+        concurrency,
+        mapItem,
+      ),
+    ).rejects.toThrow("concurrency must be a positive integer.");
+    expect(mapItem).not.toHaveBeenCalled();
+  });
+
   it("returns an empty array when no items are provided", async () => {
     const mapItem = vi.fn(
       async (item: string | undefined) => item ?? "missing",

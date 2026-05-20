@@ -17811,7 +17811,6 @@ function parseActionInputs(raw) {
 	const mode = parseEnum(raw.mode, MODES, "mode");
 	const status = parseEnum(raw.status, ACTION_STATUSES, "status");
 	const commentMarker = parseCommentMarker(raw.commentMarker);
-	const deploymentConcurrency = parsePositiveInteger(raw.deploymentConcurrency, "deployment-concurrency");
 	const commonInputs = {
 		githubToken,
 		header: requireNonEmpty(raw.header, "header").replace(/\r?\n/g, " "),
@@ -17822,6 +17821,7 @@ function parseActionInputs(raw) {
 	};
 	if (mode === "deploy-and-comment") {
 		if (!vercelToken) throw new InputError("vercel-token is required when mode is deploy-and-comment.");
+		const deploymentConcurrency = parsePositiveInteger(raw.deploymentConcurrency, "deployment-concurrency");
 		return {
 			...commonInputs,
 			deploymentConcurrency,
@@ -18644,7 +18644,8 @@ function toError(error) {
 	return error instanceof Error ? error : new Error(String(error));
 }
 async function buildDeployAndCommentRows(inputs, runUrl, updatedAtUtc) {
-	const deploymentResults = await mapWithConcurrencyLimit(inputs.deployments, inputs.deploymentConcurrency, async (deployment) => {
+	const deploymentResults = await mapWithConcurrencyLimit(inputs.deployments, inputs.deploymentConcurrency, async (deployment, index) => {
+		if (deployment === void 0) throw new Error(`deployments[${index}] is missing.`);
 		let deploymentUrl = deployment.deploymentUrl;
 		let deploymentFailed = false;
 		let deployFailure;

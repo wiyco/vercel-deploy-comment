@@ -94,7 +94,10 @@ For each `deploy-and-comment` entry, the action:
 4. Runs `vercel build --yes`.
 5. Runs `vercel deploy --prebuilt`.
 
-This avoids sharing repo-local `.vercel` state across multiple projects or environments, including multiple rows that point at the same source `cwd`.
+> [!NOTE]
+>
+> Multiple `deploy-and-comment` entries within one action invocation run in parallel, and the managed PR comment is created or updated once after all rows are ready. Each row uses an isolated temp workspace, so repo-local `.vercel` state is not shared across projects or environments, including multiple rows that point at the same source `cwd`.
+
 The action strips GitHub Actions `INPUT_*` variables from all Vercel CLI child processes and passes `vercel-token` to authenticated steps through `VERCEL_TOKEN`, so action input secrets do not appear in command-line arguments or in the local build step's environment. Other workflow-managed secrets still remain visible to `vercel build` if the workflow exports them through non-`INPUT_*` environment variables.
 
 ## Inputs

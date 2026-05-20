@@ -87,7 +87,11 @@ vercel deploy --prebuilt
 5. Build an explicit child-process environment for every Vercel CLI invocation, remove GitHub Actions `INPUT_*` variables, and attach the input token to authenticated CLI invocations through `VERCEL_TOKEN`, not command-line arguments.
 6. Preserve other caller-provided environment variables. This action does not attempt to scrub arbitrary non-`INPUT_*` secrets exported by the workflow.
 
-This design makes same-`cwd`, multi-project and multi-environment deployments safe because local `.vercel` state is not shared between rows.
+> [!NOTE]
+>
+> All `deploy-and-comment` entries in one action invocation run in parallel. After every row is ready, the action performs one managed comment create-or-update using the combined row set.
+>
+> This design makes same-`cwd`, multi-project and multi-environment deployments safe because local `.vercel` state is not shared between rows.
 
 ### Metadata Resolution
 
@@ -157,6 +161,7 @@ When updating the PR comment, the action:
 
 ### Concurrency
 
+- Parallel deployment entries inside one action invocation are safe because each row uses an isolated temp workspace and the managed comment is written once after row assembly completes.
 - The managed comment update flow is a single read-modify-write cycle against the full comment body.
 - Concurrent jobs or workflow runs that share the same `comment-marker` are not safe. Two writers can both merge against stale snapshots, and the later PATCH can overwrite rows added by the earlier PATCH.
 - This action does not provide optimistic locking for comment updates. If multiple jobs need to contribute to one shared comment, serialize updates for that `comment-marker`, for example with `needs`, workflow or job `concurrency`, or a final aggregator job.

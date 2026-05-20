@@ -43,6 +43,10 @@ export interface ResolveStatusOptions {
   actionStatus: ActionStatus;
 }
 
+export function getInProgressDisplayStatus(): DisplayStatus {
+  return IN_PROGRESS;
+}
+
 export function resolveDisplayStatus(
   options: ResolveStatusOptions,
 ): DisplayStatus {

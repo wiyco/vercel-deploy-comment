@@ -18399,6 +18399,7 @@ function stripLeadingSlash(value) {
 //#endregion
 //#region src/shared/concurrency.ts
 async function mapWithConcurrencyLimit(items, concurrency, mapItem) {
+	if (!Number.isInteger(concurrency) || concurrency < 1) throw new Error("concurrency must be a positive integer.");
 	if (items.length === 0) return [];
 	const results = new Array(items.length);
 	const workerCount = Math.min(concurrency, items.length);

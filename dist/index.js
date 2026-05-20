@@ -18397,6 +18397,36 @@ function stripLeadingSlash(value) {
 	return value.replace(/^\/+/, "");
 }
 //#endregion
+//#region src/shared/concurrency.ts
+async function mapWithConcurrencyLimit(items, concurrency, mapItem) {
+	if (items.length === 0) return [];
+	const results = new Array(items.length);
+	const workerCount = Math.min(concurrency, items.length);
+	let nextIndex = 0;
+	let hasError = false;
+	let firstError;
+	async function runWorker() {
+		while (true) {
+			if (hasError) return;
+			const currentIndex = nextIndex;
+			if (currentIndex >= items.length) return;
+			nextIndex += 1;
+			try {
+				results[currentIndex] = await mapItem(items[currentIndex], currentIndex);
+			} catch (error) {
+				if (!hasError) {
+					hasError = true;
+					firstError = error;
+				}
+				return;
+			}
+		}
+	}
+	await Promise.all(Array.from({ length: workerCount }, () => runWorker()));
+	if (hasError) throw firstError;
+	return results;
+}
+//#endregion
 //#region src/vercel/deployment.ts
 const VERCEL_BINARY = "vercel";
 const EXCLUDED_WORKSPACE_ENTRY_NAMES = new Set([".git", ".vercel"]);
@@ -18612,32 +18642,6 @@ function sanitizeErrorMessage(error, inputs) {
 }
 function toError(error) {
 	return error instanceof Error ? error : new Error(String(error));
-}
-async function mapWithConcurrencyLimit(items, concurrency, mapItem) {
-	if (items.length === 0) return [];
-	const results = new Array(items.length);
-	const workerCount = Math.min(concurrency, items.length);
-	let nextIndex = 0;
-	let firstError;
-	async function runWorker() {
-		while (true) {
-			if (firstError !== void 0) return;
-			const currentIndex = nextIndex;
-			if (currentIndex >= items.length) return;
-			nextIndex += 1;
-			try {
-				const item = items[currentIndex];
-				if (item === void 0) return;
-				results[currentIndex] = await mapItem(item, currentIndex);
-			} catch (error) {
-				firstError ??= error;
-				return;
-			}
-		}
-	}
-	await Promise.all(Array.from({ length: workerCount }, () => runWorker()));
-	if (firstError !== void 0) throw firstError;
-	return results;
 }
 async function buildDeployAndCommentRows(inputs, runUrl, updatedAtUtc) {
 	const deploymentResults = await mapWithConcurrencyLimit(inputs.deployments, inputs.deploymentConcurrency, async (deployment) => {

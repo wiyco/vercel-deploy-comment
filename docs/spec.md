@@ -16,7 +16,7 @@ This action deploys one or more Vercel projects, or accepts existing deployment 
 | `header` | No | `Vercel Preview Deployment` | Markdown heading text for the pull request comment. |
 | `footer` | No | None | Optional Markdown appended after the table. |
 | `comment-marker` | No | `default` | Stable marker key used to find and update the managed PR comment. |
-| `status` | No | `success` | Fallback GitHub Actions status when Vercel deployment details are unavailable. |
+| `status` | No | `success` | Fallback GitHub Actions status when `deployments[].status` is unset and Vercel deployment details are unavailable. |
 | `comment-on-failure` | No | `true` | Whether deploy failures still upsert the affected rows before the action fails. |
 
 ### Outputs
@@ -63,6 +63,7 @@ Required fields:
 
 Optional fields:
 
+- `status: "ready" | "failed" | "cancelled" | "skipped" | "in_progress"`
 - `displayName: string`
 - `teamId: string`
 - `slug: string`
@@ -113,7 +114,13 @@ Project display names are resolved in this order:
 4. Vercel deployment details `name`
 5. `projectId`
 
-Preview URL and deployment status are resolved from the deployment URL plus Vercel deployment details when available.
+Preview URLs are resolved from the deployment URL, with Vercel deployment details used to enrich the rendered row when available.
+
+Deployment statuses are resolved in this order:
+
+1. Explicit `comment-only` `deployments[].status`
+2. Vercel deployment details `readyState`
+3. Top-level fallback input `status`
 
 ### External API Usage
 
@@ -205,7 +212,7 @@ The `Status` cell renders an emoji followed by the linked label, such as `✅ [R
 
 ## Status Mapping
 
-Vercel `readyState` is preferred when available. Otherwise the fallback GitHub Actions status is used.
+Explicit `comment-only` `deployments[].status` is preferred when set. Otherwise Vercel `readyState` is preferred when available. Otherwise the fallback GitHub Actions status is used.
 
 | Source value | Display |
 | :--- | :--- |

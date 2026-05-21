@@ -114,7 +114,7 @@ Top-level inputs:
 | `header` | No | Markdown heading text shown above the table. | `Vercel Preview Deployment` |
 | `footer` | No | Optional Markdown appended below the table. | - |
 | `comment-marker` | No | Stable key for the managed PR comment. | `default` |
-| `status` | No | Fallback action status when Vercel deployment details are unavailable. | `success` |
+| `status` | No | Fallback action status when Vercel deployment details are unavailable. In `comment-only` mode, `deployments[].status` overrides this value per row. | `success` |
 | `comment-on-failure` | No | When `true`, failed deploy rows replace the temporary `In Progress` rows before the action fails. | `true` |
 
 `deploy-and-comment` entries:
@@ -139,6 +139,7 @@ Top-level inputs:
 | `environment` | Yes | Deployment environment rendered in the PR comment. |
 | `projectUrl` | Yes | Absolute `https://` URL for the Vercel project. |
 | `deploymentUrl` | Yes | Absolute `https://` URL for the deployment preview. |
+| `status` | No | Explicit row status for `comment-only`. Allowed values: `ready`, `failed`, `cancelled`, `skipped`, `in_progress`. When set, it overrides Vercel status enrichment and the top-level fallback `status`. |
 | `displayName` | No | Display override for the project name shown in the PR comment. |
 | `teamId` | No | Optional Vercel team ID used for API enrichment. |
 | `slug` | No | Optional Vercel team or account slug used for API enrichment. |
@@ -163,7 +164,8 @@ Legacy `deployments[].command` and `deployments[].projectName` are no longer sup
           "projectId": "prj_web",
           "environment": "preview",
           "projectUrl": "https://vercel.com/my-team/web",
-          "deploymentUrl": "https://web-git-feature-my-team.vercel.app"
+          "deploymentUrl": "https://web-git-feature-my-team.vercel.app",
+          "status": "ready"
         }
       ]
 ```

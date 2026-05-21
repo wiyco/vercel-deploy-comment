@@ -6,6 +6,16 @@ export const ACTION_STATUSES = [
 ] as const;
 export type ActionStatus = (typeof ACTION_STATUSES)[number];
 
+export const COMMENT_ONLY_DEPLOYMENT_STATUSES = [
+  "ready",
+  "failed",
+  "cancelled",
+  "skipped",
+  "in_progress",
+] as const;
+export type CommentOnlyDeploymentStatus =
+  (typeof COMMENT_ONLY_DEPLOYMENT_STATUSES)[number];
+
 export const MODES = [
   "deploy-and-comment",
   "comment-only",
@@ -29,6 +39,7 @@ export interface DeployAndCommentDeploymentInput extends BaseDeploymentInput {
 
 export interface CommentOnlyDeploymentInput extends BaseDeploymentInput {
   deploymentUrl: string;
+  status?: CommentOnlyDeploymentStatus;
 }
 
 export type DeploymentInput =

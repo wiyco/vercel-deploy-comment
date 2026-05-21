@@ -1,4 +1,8 @@
-import type { ActionStatus, DisplayStatus } from "../shared/types";
+import type {
+  ActionStatus,
+  CommentOnlyDeploymentStatus,
+  DisplayStatus,
+} from "../shared/types";
 
 const READY: DisplayStatus = {
   key: "ready",
@@ -39,6 +43,7 @@ const IN_PROGRESS_READY_STATES = new Set([
 ]);
 
 export interface ResolveStatusOptions {
+  deploymentStatus?: CommentOnlyDeploymentStatus;
   vercelReadyState?: string;
   actionStatus: ActionStatus;
 }
@@ -50,6 +55,10 @@ export function getInProgressDisplayStatus(): DisplayStatus {
 export function resolveDisplayStatus(
   options: ResolveStatusOptions,
 ): DisplayStatus {
+  if (options.deploymentStatus) {
+    return resolveExplicitDisplayStatus(options.deploymentStatus);
+  }
+
   const readyState = options.vercelReadyState?.trim().toUpperCase();
 
   if (readyState) {
@@ -81,5 +90,26 @@ export function resolveDisplayStatus(
       return CANCELLED;
     case "skipped":
       return SKIPPED;
+    default:
+      return UNKNOWN;
+  }
+}
+
+function resolveExplicitDisplayStatus(
+  status: CommentOnlyDeploymentStatus,
+): DisplayStatus {
+  switch (status) {
+    case "ready":
+      return READY;
+    case "failed":
+      return FAILED;
+    case "cancelled":
+      return CANCELLED;
+    case "skipped":
+      return SKIPPED;
+    case "in_progress":
+      return IN_PROGRESS;
+    default:
+      return UNKNOWN;
   }
 }

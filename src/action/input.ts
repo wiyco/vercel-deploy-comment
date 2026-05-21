@@ -4,6 +4,7 @@ import {
   ACTION_STATUSES,
   type ActionInputs,
   type BaseDeploymentInput,
+  COMMENT_ONLY_DEPLOYMENT_STATUSES,
   type CommentOnlyDeploymentInput,
   type DeployAndCommentDeploymentInput,
   type DeploymentInput,
@@ -233,6 +234,11 @@ function parseCommentOnlyDeploymentInput(
       record.deploymentUrl,
       `deployments[${index}].deploymentUrl`,
     ),
+    status: optionalEnum(
+      record.status,
+      COMMENT_ONLY_DEPLOYMENT_STATUSES,
+      `deployments[${index}].status`,
+    ),
   };
 }
 
@@ -278,6 +284,30 @@ function parseEnum<const T extends readonly string[]>(
   field: string,
 ): T[number] {
   const normalized = requireString(value, field).trim();
+  const enumValue = values.find((candidate) => candidate === normalized);
+
+  if (enumValue !== undefined) {
+    return enumValue;
+  }
+
+  throw new InputError(`${field} must be one of: ${values.join(", ")}.`);
+}
+
+function optionalEnum<const T extends readonly string[]>(
+  value: unknown,
+  values: T,
+  field: string,
+): T[number] | undefined {
+  if (value === undefined || value === null || value === "") {
+    return undefined;
+  }
+
+  const normalized = requireString(value, field).trim();
+
+  if (normalized.length === 0) {
+    return undefined;
+  }
+
   const enumValue = values.find((candidate) => candidate === normalized);
 
   if (enumValue !== undefined) {

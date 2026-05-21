@@ -17782,6 +17782,13 @@ const ACTION_STATUSES = [
 	"cancelled",
 	"skipped"
 ];
+const COMMENT_ONLY_DEPLOYMENT_STATUSES = [
+	"ready",
+	"failed",
+	"cancelled",
+	"skipped",
+	"in_progress"
+];
 const MODES = ["deploy-and-comment", "comment-only"];
 //#endregion
 //#region src/action/input.ts
@@ -17892,7 +17899,8 @@ function parseCommentOnlyDeploymentInput(item, index) {
 	const record = requireRecord(item, `deployments[${index}]`);
 	return {
 		...parseDeploymentBase(record, index),
-		deploymentUrl: requireHttpsUrl(record.deploymentUrl, `deployments[${index}].deploymentUrl`)
+		deploymentUrl: requireHttpsUrl(record.deploymentUrl, `deployments[${index}].deploymentUrl`),
+		status: optionalEnum(record.status, COMMENT_ONLY_DEPLOYMENT_STATUSES, `deployments[${index}].status`)
 	};
 }
 function parseBoolean(value, field) {
@@ -17913,6 +17921,14 @@ function parseCommentMarker(value) {
 }
 function parseEnum(value, values, field) {
 	const normalized = requireString(value, field).trim();
+	const enumValue = values.find((candidate) => candidate === normalized);
+	if (enumValue !== void 0) return enumValue;
+	throw new InputError(`${field} must be one of: ${values.join(", ")}.`);
+}
+function optionalEnum(value, values, field) {
+	if (value === void 0 || value === null || value === "") return;
+	const normalized = requireString(value, field).trim();
+	if (normalized.length === 0) return;
 	const enumValue = values.find((candidate) => candidate === normalized);
 	if (enumValue !== void 0) return enumValue;
 	throw new InputError(`${field} must be one of: ${values.join(", ")}.`);
@@ -18232,6 +18248,7 @@ function getInProgressDisplayStatus() {
 	return IN_PROGRESS;
 }
 function resolveDisplayStatus(options) {
+	if (options.deploymentStatus) return resolveExplicitDisplayStatus(options.deploymentStatus);
 	const readyState = options.vercelReadyState?.trim().toUpperCase();
 	if (readyState) {
 		if (readyState === "READY") return READY;
@@ -18245,6 +18262,17 @@ function resolveDisplayStatus(options) {
 		case "failure": return FAILED;
 		case "cancelled": return CANCELLED;
 		case "skipped": return SKIPPED;
+		default: return UNKNOWN;
+	}
+}
+function resolveExplicitDisplayStatus(status) {
+	switch (status) {
+		case "ready": return READY;
+		case "failed": return FAILED;
+		case "cancelled": return CANCELLED;
+		case "skipped": return SKIPPED;
+		case "in_progress": return IN_PROGRESS;
+		default: return UNKNOWN;
 	}
 }
 //#endregion
@@ -18748,6 +18776,7 @@ async function buildCommentOnlyRows(inputs, runUrl) {
 		}, buildDeploymentRowResult({
 			deployment,
 			deploymentUrl,
+			deploymentStatus: deployment.status,
 			deploymentDetails,
 			projectDetails,
 			deploymentFailed: false,
@@ -18785,6 +18814,7 @@ async function resolveDeploymentMetadata(inputs, deployment, deploymentUrl) {
 function buildDeploymentRowResult(options) {
 	const previewUrl = getPreviewUrl(options.deploymentUrl, options.deploymentDetails);
 	const status = resolveDisplayStatus({
+		deploymentStatus: options.deploymentStatus,
 		vercelReadyState: options.deploymentDetails?.readyState,
 		actionStatus: options.deploymentFailed ? "failure" : options.actionStatus
 	});

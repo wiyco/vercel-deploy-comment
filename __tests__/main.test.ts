@@ -377,4 +377,91 @@ describe("run", () => {
       ]),
     );
   });
+
+  it("prefers explicit per-deployment statuses in comment-only mode", async () => {
+    readActionInputs.mockReturnValue({
+      githubToken: "ghs_token",
+      vercelToken: "vercel_token",
+      mode: "comment-only",
+      deployments: [
+        {
+          environment: "preview",
+          projectId: "prj_ready",
+          projectUrl: "https://vercel.com/team/ready",
+          deploymentUrl: "https://ready-git-feature-team.vercel.app",
+          status: "ready",
+        },
+        {
+          environment: "preview",
+          projectId: "prj_failed",
+          projectUrl: "https://vercel.com/team/failed",
+          deploymentUrl: "https://failed-git-feature-team.vercel.app",
+          status: "failed",
+        },
+        {
+          environment: "preview",
+          projectId: "prj_cancelled",
+          projectUrl: "https://vercel.com/team/cancelled",
+          deploymentUrl: "https://cancelled-git-feature-team.vercel.app",
+          status: "cancelled",
+        },
+        {
+          environment: "preview",
+          projectId: "prj_skipped",
+          projectUrl: "https://vercel.com/team/skipped",
+          deploymentUrl: "https://skipped-git-feature-team.vercel.app",
+          status: "skipped",
+        },
+        {
+          environment: "preview",
+          projectId: "prj_building",
+          projectUrl: "https://vercel.com/team/building",
+          deploymentUrl: "https://building-git-feature-team.vercel.app",
+          status: "in_progress",
+        },
+      ],
+      header: "Preview",
+      footer: undefined,
+      commentMarker: "default",
+      status: "success",
+      commentOnFailure: false,
+    });
+    getVercelDeploymentDetails.mockImplementation(
+      async ({ deploymentUrl }: { deploymentUrl: string }) => {
+        if (deploymentUrl.includes("ready-")) {
+          return {
+            readyState: "ERROR",
+          };
+        }
+
+        if (
+          deploymentUrl.includes("failed-") ||
+          deploymentUrl.includes("cancelled-") ||
+          deploymentUrl.includes("skipped-") ||
+          deploymentUrl.includes("building-")
+        ) {
+          return {
+            readyState: "READY",
+          };
+        }
+
+        return undefined;
+      },
+    );
+
+    const { run } = await import("../src/main");
+
+    await expect(run()).resolves.toBeUndefined();
+
+    expect(setOutput).toHaveBeenCalledWith(
+      "statuses",
+      JSON.stringify([
+        "ready",
+        "failed",
+        "cancelled",
+        "skipped",
+        "in_progress",
+      ]),
+    );
+  });
 });

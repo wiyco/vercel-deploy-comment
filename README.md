@@ -153,7 +153,7 @@ Top-level inputs:
 ## Comment-only Mode
 
 ```yaml
-- uses: wiyco/vercel-deploy-comment@2
+- uses: wiyco/vercel-deploy-comment@v2
   with:
     mode: comment-only
     vercel-token: ${{ secrets.VERCEL_TOKEN }}

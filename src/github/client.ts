@@ -163,6 +163,12 @@ export class GitHubClient {
     };
   }
 
+  async getPullRequestComment(commentId: number): Promise<IssueComment> {
+    return this.request<IssueComment>(
+      `/repos/${this.#context.owner}/${this.#context.repo}/issues/comments/${commentId}`,
+    );
+  }
+
   async deletePullRequestComment(commentId: number): Promise<void> {
     await this.requestWithoutResponse(
       `/repos/${this.#context.owner}/${this.#context.repo}/issues/comments/${commentId}`,

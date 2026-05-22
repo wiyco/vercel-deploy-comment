@@ -91,7 +91,7 @@ vercel deploy --prebuilt
 
 > [!NOTE]
 >
-> `deploy-and-comment` entries in one action invocation run in parallel up to `deployment-concurrency` at a time. Before the deploys start, the action performs one managed comment create-or-update with `In Progress` rows for the current input. After every row is ready, it updates that same managed comment with the combined final row set.
+> `deploy-and-comment` entries in one action invocation run in parallel up to `deployment-concurrency` at a time. Before the deploys start, the action performs one managed comment create-or-update with `In Progress` rows for the current input. As each row resolves, one in-process comment writer serializes a full-body update for that row against the same managed comment.
 >
 > This design makes same-`cwd`, multi-project and multi-environment deployments safe because local `.vercel` state is not shared between rows.
 >
@@ -121,6 +121,7 @@ GitHub API:
 
 - `POST /graphql` with `viewer { login }` to resolve the authenticated login used to identify the managed comment. See [Authenticating as a GitHub App installation](https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/authenticating-as-a-github-app-installation).
 - `GET /repos/{owner}/{repo}/issues/{issue_number}/comments` to scan pull request conversation comments for the existing managed comment. See [List issue comments](https://docs.github.com/en/rest/issues/comments#list-issue-comments).
+- `GET /repos/{owner}/{repo}/issues/comments/{comment_id}` for best-effort recovery reads after failed managed-comment updates. This is not part of the steady-state per-row publish path. See [Get an issue comment](https://docs.github.com/en/rest/issues/comments#get-an-issue-comment).
 - `POST /repos/{owner}/{repo}/issues/{issue_number}/comments` to create the managed pull request comment. See [Create an issue comment](https://docs.github.com/en/rest/issues/comments#create-an-issue-comment).
 - `PATCH /repos/{owner}/{repo}/issues/comments/{comment_id}` to update the managed pull request comment. See [Update an issue comment](https://docs.github.com/en/rest/issues/comments#update-an-issue-comment).
 
@@ -165,14 +166,15 @@ When updating the PR comment, the action:
 
 1. Finds the existing managed comment through the full-comment marker and authenticated GitHub user.
 2. Parses existing row markers and row contents from that comment.
-3. Replaces or inserts only the rows named in the current `deployments` input.
-4. Preserves unrelated existing rows from the fetched comment snapshot.
-5. Re-renders the entire comment body in one PATCH request.
+3. Writes one `In Progress` snapshot for the current `deployments` input before any deploy work starts.
+4. Keeps the fetched row snapshot in memory for the rest of the run and replaces or inserts only the rows named in the current `deployments` input.
+5. Preserves unrelated existing rows from the startup snapshot.
+6. Re-renders the entire managed comment body for each queued row update without re-reading the full comment before every row.
 
 ### Concurrency
 
-- Parallel deployment entries inside one action invocation are safe because each row uses an isolated temp workspace, execution is bounded by `deployment-concurrency`, and the managed comment is written once after row assembly completes.
-- The managed comment update flow is a single read-modify-write cycle against the full comment body.
+- Parallel deployment entries inside one action invocation are safe because each row uses an isolated temp workspace, execution is bounded by `deployment-concurrency`, and one in-process writer serializes all managed-comment mutations for that run.
+- Managed-comment writes are spaced by at least one second between mutative GitHub requests and queued in FIFO order so closely finishing rows produce a monotonic merged comment body.
 - Concurrent jobs or workflow runs that share the same `comment-marker` are not safe. Two writers can both merge against stale snapshots, and the later PATCH can overwrite rows added by the earlier PATCH.
 - This action does not provide optimistic locking for comment updates. If multiple jobs need to contribute to one shared comment, serialize updates for that `comment-marker`, for example with `needs`, workflow or job `concurrency`, or a final aggregator job.
 
@@ -218,8 +220,9 @@ Explicit `comment-only` `deployments[].status` is preferred when set. Otherwise 
 
 ## Failure Behavior
 
-- If `pull`, `build`, or `deploy` fails and `comment-on-failure` is `true`, the action still upserts the affected row with failure status, then fails the action.
-- If `comment-on-failure` is `false`, the action rolls back the temporary `In Progress` write and fails without keeping a new comment state from the failed run.
+- If `pull`, `build`, or `deploy` fails and `comment-on-failure` is `true`, the action still publishes the affected row with failure status, flushes queued row writes, then fails the action.
+- If `comment-on-failure` is `false`, the action restores only the failed row to its startup snapshot state, or removes that row if it did not exist before the run. Other already-published row updates remain in the managed comment.
+- If a managed-comment write ultimately fails after retries, the action fails and leaves the last successfully published managed-comment body in place. It does not delete or restore the whole comment.
 - Vercel API enrichment failures do not block comment updates.
 
 ## Security Requirements
@@ -253,7 +256,7 @@ permissions:
 - Serialized jobs and workflow runs with the same `comment-marker` can add or replace independent rows in that same comment.
 - Same-`cwd` multi-project deployments do not share `.vercel/project.json`.
 - `deploy-and-comment` execution does not start more than `deployment-concurrency` rows at once.
-- `deploy-and-comment` writes `In Progress` rows before starting work and replaces them with final statuses after row resolution.
+- `deploy-and-comment` writes `In Progress` rows before starting work and publishes resolved row updates incrementally as rows finish.
 - Custom environments trigger the `Environment` column for all rows.
 - Deploy failures can still update the comment when `comment-on-failure` is `true`.
 - The implementation passes typecheck, lint, tests, code coverage, and build.

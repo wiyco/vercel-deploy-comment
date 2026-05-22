@@ -22,12 +22,14 @@ const readGitHubRuntimeContext = vi.fn(() => ({
 const findExistingActionComment = vi.fn();
 const createPullRequestComment = vi.fn();
 const deletePullRequestComment = vi.fn();
+const getPullRequestComment = vi.fn();
 const updatePullRequestComment = vi.fn();
 const GitHubClient = vi.fn().mockImplementation(function MockGitHubClient() {
   return {
     createPullRequestComment,
     deletePullRequestComment,
     findExistingActionComment,
+    getPullRequestComment,
     updatePullRequestComment,
   };
 });
@@ -49,6 +51,15 @@ vi.mock("../src/action/input", () => ({
 }));
 
 vi.mock("../src/github/client", () => ({
+  GitHubApiError: class GitHubApiError extends Error {
+    constructor(
+      message: string,
+      readonly status?: number,
+    ) {
+      super(message);
+      this.name = "GitHubApiError";
+    }
+  },
   GitHubClient,
   buildRunUrl,
   readGitHubRuntimeContext,
@@ -83,6 +94,7 @@ function createDeferred<T>(): {
 describe("run", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.useRealTimers();
     vi.resetModules();
     readActionInputs.mockReturnValue({
       githubToken: "ghs_token",
@@ -111,6 +123,11 @@ describe("run", () => {
       id: 10,
     });
     deletePullRequestComment.mockResolvedValue(undefined);
+    getPullRequestComment.mockResolvedValue({
+      body: "",
+      html_url: "https://github.test/acme/repo/pull/42#issuecomment-10",
+      id: 10,
+    });
     updatePullRequestComment.mockResolvedValue({
       action: "updated",
       htmlUrl: "https://github.test/acme/repo/pull/42#issuecomment-10",
@@ -122,45 +139,101 @@ describe("run", () => {
   });
 
   it("rethrows terminal failures with secrets redacted", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-05-22T00:00:00.000Z"));
     runVercelDeploy.mockRejectedValue(
       new Error("deploy failed with ghs_token and vercel_token"),
     );
 
     const { run } = await import("../src/main");
 
-    await expect(run()).rejects.toThrow("deploy failed with *** and ***");
+    const runPromise = run();
+    const runExpectation = expect(runPromise).rejects.toThrow(
+      "deploy failed with *** and ***",
+    );
+    await vi.advanceTimersByTimeAsync(1_000);
+    await runExpectation;
+
     expect(warning).toHaveBeenCalledWith("deploy failed with *** and ***");
     expect(createPullRequestComment).toHaveBeenCalledTimes(1);
-    expect(deletePullRequestComment).toHaveBeenCalledWith(10);
+    expect(updatePullRequestComment).toHaveBeenCalledTimes(1);
+    expect(updatePullRequestComment.mock.calls[0]?.[1]).not.toContain(
+      "row:prj_web:preview",
+    );
+    expect(deletePullRequestComment).not.toHaveBeenCalled();
     expect(setSecret).toHaveBeenNthCalledWith(1, "ghs_token");
     expect(setSecret).toHaveBeenNthCalledWith(2, "vercel_token");
   });
 
-  it("rolls back the temporary in-progress comment when the final update fails", async () => {
-    findExistingActionComment
-      .mockResolvedValueOnce(undefined)
-      .mockResolvedValue({
-        body: "## Preview\n\n<!-- vercel-deploy-comment:default -->\n",
-        id: 10,
-      });
-    runVercelDeploy.mockResolvedValue(
-      "https://web-git-feature-team.vercel.app",
-    );
-    updatePullRequestComment.mockRejectedValueOnce(
+  it("preserves both build and flush failures in the thrown error cause", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-05-22T00:00:00.000Z"));
+    runVercelDeploy.mockRejectedValue(new Error("deploy failed"));
+    updatePullRequestComment.mockRejectedValue(
       new Error("final comment write failed"),
     );
+    getPullRequestComment.mockRejectedValue(new Error("refresh failed"));
 
     const { run } = await import("../src/main");
 
-    await expect(run()).rejects.toThrow("final comment write failed");
+    const runPromise = run();
+    const errorPromise = runPromise.catch((error: unknown) => error);
+    await vi.advanceTimersByTimeAsync(10_000);
+    const error = await errorPromise;
+
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toBe(
+      "deploy failed; failed to flush managed pull request comment updates: final comment write failed",
+    );
+    expect((error as Error).cause).toBeInstanceOf(AggregateError);
+
+    const aggregateError = (error as Error).cause as AggregateError;
+    const aggregateErrors = aggregateError.errors as Error[];
+
+    expect(aggregateError.message).toBe(
+      "deploy failed; failed to flush managed pull request comment updates: final comment write failed",
+    );
+    expect(aggregateError.cause).toBe(aggregateErrors[0]);
+    expect(aggregateErrors).toHaveLength(2);
+    expect(aggregateErrors[0]?.message).toBe("deploy failed");
+    expect(aggregateErrors[1]?.message).toBe(
+      "failed to flush managed pull request comment updates: final comment write failed",
+    );
+    expect(aggregateErrors[1]?.cause).toBeInstanceOf(Error);
+    expect((aggregateErrors[1]?.cause as Error).message).toBe(
+      "final comment write failed",
+    );
+  });
+
+  it("fails without whole-comment rollback when an incremental comment update ultimately fails", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-05-22T00:00:00.000Z"));
+    runVercelDeploy.mockResolvedValue(
+      "https://web-git-feature-team.vercel.app",
+    );
+    updatePullRequestComment.mockRejectedValue(
+      new Error("final comment write failed"),
+    );
+    getPullRequestComment.mockRejectedValue(new Error("refresh failed"));
+
+    const { run } = await import("../src/main");
+
+    const runPromise = run();
+    const runExpectation = expect(runPromise).rejects.toThrow(
+      "final comment write failed",
+    );
+    await vi.advanceTimersByTimeAsync(10_000);
+    await runExpectation;
 
     expect(createPullRequestComment).toHaveBeenCalledTimes(1);
-    expect(updatePullRequestComment).toHaveBeenCalledTimes(1);
-    expect(deletePullRequestComment).toHaveBeenCalledWith(10);
+    expect(updatePullRequestComment).toHaveBeenCalledTimes(3);
+    expect(deletePullRequestComment).not.toHaveBeenCalled();
     expect(setOutput).not.toHaveBeenCalled();
   });
 
-  it("writes an initial In Progress comment and updates it after all rows are resolved", async () => {
+  it("writes an initial In Progress comment and publishes resolved rows incrementally", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-05-22T00:00:00.000Z"));
     const webDeployment = createDeferred<string>();
     const adminDeployment = createDeferred<string>();
     const docsDeployment = createDeferred<string>();
@@ -254,15 +327,36 @@ describe("run", () => {
     expect(initialCommentBody).toContain("⏳ [In Progress]");
 
     webDeployment.resolve("https://web-git-feature-team.vercel.app");
-    await Promise.resolve();
-    expect(updatePullRequestComment).not.toHaveBeenCalled();
+    await vi.waitFor(() => {
+      expect(runVercelDeploy).toHaveBeenCalledTimes(3);
+    });
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    expect(updatePullRequestComment).toHaveBeenCalledTimes(1);
+    const firstIncrementalBody = updatePullRequestComment.mock.calls[0]?.[1];
+    expect(firstIncrementalBody).toContain("row:prj_web:preview");
+    expect(firstIncrementalBody).toContain("✅ [Ready]");
+    expect(firstIncrementalBody).toContain("row:prj_admin:preview");
+    expect(firstIncrementalBody).toContain("row:prj_docs:preview");
+    expect(firstIncrementalBody).toContain("⏳ [In Progress]");
+
+    adminDeployment.resolve("https://admin-git-feature-team.vercel.app");
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(updatePullRequestComment).toHaveBeenCalledTimes(2);
+    const secondIncrementalBody = updatePullRequestComment.mock.calls[1]?.[1];
+    expect(secondIncrementalBody).toContain("row:prj_web:preview");
+    expect(secondIncrementalBody).toContain("row:prj_admin:preview");
+    expect(secondIncrementalBody).toContain("✅ [Ready]");
+    expect(secondIncrementalBody).toContain("row:prj_docs:preview");
+    expect(secondIncrementalBody).toContain("⏳ [In Progress]");
 
     docsDeployment.resolve("https://docs-git-feature-team.vercel.app");
+    await vi.advanceTimersByTimeAsync(1_000);
     await expect(runPromise).resolves.toBeUndefined();
 
     expect(createPullRequestComment).toHaveBeenCalledTimes(1);
-    expect(updatePullRequestComment).toHaveBeenCalledTimes(1);
-    const finalCommentBody = updatePullRequestComment.mock.calls[0]?.[1];
+    expect(updatePullRequestComment).toHaveBeenCalledTimes(3);
+    const finalCommentBody = updatePullRequestComment.mock.calls[2]?.[1];
     expect(finalCommentBody).toContain("✅ [Ready]");
     expect(finalCommentBody.indexOf("row:prj_web:preview")).toBeLessThan(
       finalCommentBody.indexOf("row:prj_admin:preview"),
@@ -284,6 +378,50 @@ describe("run", () => {
         "ready",
         "ready",
         "ready",
+      ]),
+    );
+  });
+
+  it("publishes failed rows when comment-on-failure is true and then fails the action", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-05-22T00:00:00.000Z"));
+    readActionInputs.mockReturnValue({
+      githubToken: "ghs_token",
+      vercelToken: "vercel_token",
+      mode: "deploy-and-comment",
+      deploymentConcurrency: 1,
+      deployments: [
+        {
+          cwd: ".",
+          environment: "preview",
+          orgId: "team_123",
+          projectId: "prj_web",
+          projectUrl: "https://vercel.com/team/web",
+        },
+      ],
+      header: "Preview",
+      footer: undefined,
+      commentMarker: "default",
+      status: "success",
+      commentOnFailure: true,
+    });
+    runVercelDeploy.mockRejectedValue(new Error("deploy failed"));
+
+    const { run } = await import("../src/main");
+
+    const runPromise = run();
+    const runExpectation = expect(runPromise).rejects.toThrow("deploy failed");
+    await vi.advanceTimersByTimeAsync(1_000);
+    await runExpectation;
+
+    expect(updatePullRequestComment).toHaveBeenCalledTimes(1);
+    expect(updatePullRequestComment.mock.calls[0]?.[1]).toContain(
+      "❌ [Failed]",
+    );
+    expect(setOutput).toHaveBeenCalledWith(
+      "statuses",
+      JSON.stringify([
+        "failed",
       ]),
     );
   });

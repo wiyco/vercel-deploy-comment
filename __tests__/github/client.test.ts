@@ -295,6 +295,32 @@ describe("GitHubClient", () => {
     expect(calls[0]?.url.pathname).toBe("/repos/acme/repo/issues/comments/10");
   });
 
+  it("fetches a pull request comment by id", async () => {
+    const calls: Array<{
+      url: URL;
+      init?: RequestInit;
+    }> = [];
+    const client = new GitHubClient(
+      "ghs_token",
+      context,
+      responseQueue(calls, [
+        {
+          body: "latest body",
+          html_url: "https://github.test/acme/repo/pull/42#issuecomment-10",
+          id: 10,
+        },
+      ]),
+    );
+
+    await expect(client.getPullRequestComment(10)).resolves.toMatchObject({
+      body: "latest body",
+      id: 10,
+    });
+
+    expect(calls[0]?.init?.method).toBeUndefined();
+    expect(calls[0]?.url.pathname).toBe("/repos/acme/repo/issues/comments/10");
+  });
+
   it("rejects delete responses that return 205 instead of 204", async () => {
     const client = new GitHubClient(
       "ghs_token",

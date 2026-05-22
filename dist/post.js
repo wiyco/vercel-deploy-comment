@@ -13,9 +13,6 @@ import { StringDecoder } from "string_decoder";
 import * as child from "child_process";
 import { setTimeout as setTimeout$1 } from "timers";
 import { readFileSync } from "node:fs";
-import { cp, mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
 //#region \0rolldown/runtime.js
 var __create = Object.create;
 var __defProp = Object.defineProperty;
@@ -16445,7 +16442,7 @@ var __awaiter$6 = function(thisArg, _arguments, P, generator) {
 		step((generator = generator.apply(thisArg, _arguments || [])).next());
 	});
 };
-const { access, appendFile, writeFile: writeFile$1 } = promises;
+const { access, appendFile, writeFile } = promises;
 const SUMMARY_ENV_VAR = "GITHUB_STEP_SUMMARY";
 var Summary = class {
 	constructor() {
@@ -16496,7 +16493,7 @@ var Summary = class {
 		return __awaiter$6(this, void 0, void 0, function* () {
 			const overwrite = !!(options === null || options === void 0 ? void 0 : options.overwrite);
 			const filePath = yield this.filePath();
-			yield (overwrite ? writeFile$1 : appendFile)(filePath, this._buffer, { encoding: "utf8" });
+			yield (overwrite ? writeFile : appendFile)(filePath, this._buffer, { encoding: "utf8" });
 			return this.emptyBuffer();
 		});
 	}
@@ -16766,7 +16763,7 @@ var __awaiter$5 = function(thisArg, _arguments, P, generator) {
 		step((generator = generator.apply(thisArg, _arguments || [])).next());
 	});
 };
-const { chmod, copyFile, lstat, mkdir: mkdir$1, open, readdir: readdir$1, rename, rm: rm$1, rmdir, stat, symlink, unlink } = fs.promises;
+const { chmod, copyFile, lstat, mkdir, open, readdir, rename, rm, rmdir, stat, symlink, unlink } = fs.promises;
 const IS_WINDOWS$1 = process.platform === "win32";
 fs.constants.O_RDONLY;
 function exists(fsPath) {
@@ -16824,7 +16821,7 @@ function tryGetExecutablePath(filePath, extensions) {
 					try {
 						const directory = path.dirname(filePath);
 						const upperName = path.basename(filePath).toUpperCase();
-						for (const actualName of yield readdir$1(directory)) if (upperName === actualName.toUpperCase()) {
+						for (const actualName of yield readdir(directory)) if (upperName === actualName.toUpperCase()) {
 							filePath = path.join(directory, actualName);
 							break;
 						}
@@ -17785,8 +17782,6 @@ const HTTPS_PROTOCOL = "https:";
 const HTTP_PROTOCOL = "http:";
 const HTTPS_ONLY_PROTOCOLS = [HTTPS_PROTOCOL];
 const HTTP_AND_HTTPS_PROTOCOLS = [HTTPS_PROTOCOL, HTTP_PROTOCOL];
-const NO_PREVIEW = "N/A";
-const LEGACY_NO_PREVIEW = "Unavailable";
 const ROW_MARKER_PATTERN = /<!--\s*vercel-deploy-comment:row:[^\r\n]*?-->/;
 function buildCommentMarker(marker) {
 	return `<!-- vercel-deploy-comment:${marker} -->`;
@@ -17816,21 +17811,6 @@ function parseDeploymentCommentRows(body) {
 	}
 	return rows;
 }
-function upsertDeploymentCommentRows(existingRows, nextRows, inputOrder) {
-	const orderedInputKeys = uniqueStrings$1(inputOrder);
-	const inputKeySet = new Set(orderedInputKeys);
-	const nextByKey = new Map(nextRows.map((row) => [buildDeploymentRowKey(row.projectId, row.environment), row]));
-	const mergedRows = [];
-	for (const key of orderedInputKeys) {
-		const row = nextByKey.get(key);
-		if (row) mergedRows.push(row);
-	}
-	for (const row of existingRows) {
-		const key = buildDeploymentRowKey(row.projectId, row.environment);
-		if (!inputKeySet.has(key)) mergedRows.push(row);
-	}
-	return mergedRows;
-}
 function renderTableHeader(includeEnvironment) {
 	if (includeEnvironment) return "| Project | Environment | Status | Preview | Updated (UTC) |";
 	return "| Project | Status | Preview | Updated (UTC) |";
@@ -17842,7 +17822,7 @@ function renderTableSeparator(includeEnvironment) {
 function renderRow(row, includeEnvironment) {
 	const project = `${buildRowMarker(row.projectId, row.environment)} ${markdownHttpsLink(row.projectName, row.projectUrl)}`;
 	const status = `${row.status.emoji} ${markdownLink(row.status.label, row.runUrl)}`;
-	const preview = shouldRenderPreviewLink(row) ? markdownHttpsLink("Preview", row.previewUrl) : NO_PREVIEW;
+	const preview = row.previewUrl ? markdownHttpsLink("Preview", row.previewUrl) : "Unavailable";
 	const updatedAt = formatUtcTimestamp(row.updatedAtUtc);
 	if (includeEnvironment) return `| ${project} | ${escapeTableCell(row.environment)} | ${status} | ${preview} | ${escapeTableCell(updatedAt)} |`;
 	return `| ${project} | ${status} | ${preview} | ${escapeTableCell(updatedAt)} |`;
@@ -17862,7 +17842,7 @@ function parseDeploymentCommentRow(line) {
 	const projectLink = parseMarkdownLink(projectCell.replace(rowMarker, "").trim(), HTTPS_ONLY_PROTOCOLS);
 	const statusDetails = parseStatusCell(statusCell);
 	if (!projectLink || !statusDetails) return;
-	const previewLink = isNoPreviewCell(previewCell) ? void 0 : parseMarkdownLink(previewCell, HTTPS_ONLY_PROTOCOLS);
+	const previewLink = previewCell === "Unavailable" ? void 0 : parseMarkdownLink(previewCell, HTTPS_ONLY_PROTOCOLS);
 	return {
 		environment: rowIdentity.environment,
 		projectId: rowIdentity.projectId,
@@ -17940,14 +17920,8 @@ function splitTableCells(line) {
 function hasCustomEnvironment(rows) {
 	return rows.some((row) => isCustomEnvironment(row.environment));
 }
-function shouldRenderPreviewLink(row) {
-	return row.status.key === "ready" && Boolean(row.previewUrl);
-}
 function isCustomEnvironment(environment) {
 	return !STANDARD_ENVIRONMENTS.has(environment.trim().toLowerCase());
-}
-function isNoPreviewCell(cell) {
-	return cell === NO_PREVIEW || cell === LEGACY_NO_PREVIEW;
 }
 function markdownLink(label, url) {
 	return markdownLinkWithProtocols(label, url, HTTP_AND_HTTPS_PROTOCOLS);
@@ -18001,83 +17975,15 @@ function labelToStatusKey(label) {
 		default: return label.trim().toLowerCase().replace(/\s+/g, "_");
 	}
 }
-function uniqueStrings$1(values) {
-	const seen = /* @__PURE__ */ new Set();
-	const unique = [];
-	for (const value of values) if (!seen.has(value)) {
-		seen.add(value);
-		unique.push(value);
-	}
-	return unique;
-}
 //#endregion
 //#region src/comment/status.ts
-const READY = {
-	key: "ready",
-	emoji: "✅",
-	label: "Ready"
-};
-const FAILED = {
-	key: "failed",
-	emoji: "❌",
-	label: "Failed"
-};
 const CANCELLED = {
 	key: "cancelled",
 	emoji: "🚫",
 	label: "Cancelled"
 };
-const SKIPPED = {
-	key: "skipped",
-	emoji: "⏭️",
-	label: "Skipped"
-};
-const IN_PROGRESS = {
-	key: "in_progress",
-	emoji: "⏳",
-	label: "In Progress"
-};
-const UNKNOWN = {
-	key: "unknown",
-	emoji: "❔",
-	label: "Unknown"
-};
-const IN_PROGRESS_READY_STATES = new Set([
-	"BUILDING",
-	"QUEUED",
-	"INITIALIZING",
-	"ANALYZING"
-]);
-function getInProgressDisplayStatus() {
-	return IN_PROGRESS;
-}
-function resolveDisplayStatus(options) {
-	if (options.deploymentStatus) return resolveExplicitDisplayStatus(options.deploymentStatus);
-	const readyState = options.vercelReadyState?.trim().toUpperCase();
-	if (readyState) {
-		if (readyState === "READY") return READY;
-		if (readyState === "ERROR") return FAILED;
-		if (readyState === "CANCELED" || readyState === "CANCELLED") return CANCELLED;
-		if (IN_PROGRESS_READY_STATES.has(readyState)) return IN_PROGRESS;
-		return UNKNOWN;
-	}
-	switch (options.actionStatus) {
-		case "success": return READY;
-		case "failure": return FAILED;
-		case "cancelled": return CANCELLED;
-		case "skipped": return SKIPPED;
-		default: return UNKNOWN;
-	}
-}
-function resolveExplicitDisplayStatus(status) {
-	switch (status) {
-		case "ready": return READY;
-		case "failed": return FAILED;
-		case "cancelled": return CANCELLED;
-		case "skipped": return SKIPPED;
-		case "in_progress": return IN_PROGRESS;
-		default: return UNKNOWN;
-	}
+function getCancelledDisplayStatus() {
+	return CANCELLED;
 }
 //#endregion
 //#region src/github/client.ts
@@ -18251,369 +18157,6 @@ function ensureTrailingSlash(value) {
 }
 function stripLeadingSlash(value) {
 	return value.replace(/^\/+/, "");
-}
-//#endregion
-//#region src/comment/writer.ts
-const DEFAULT_MIN_WRITE_INTERVAL_MS = 1e3;
-const DEFAULT_MAX_WRITE_ATTEMPTS = 3;
-const DEFAULT_RETRY_BASE_DELAY_MS = 1e3;
-const RETRYABLE_GITHUB_STATUS_CODES = new Set([
-	408,
-	409,
-	429,
-	500,
-	502,
-	503,
-	504
-]);
-var ManagedCommentWriter = class {
-	#client;
-	#existingRows;
-	#footer;
-	#header;
-	#inputOrder;
-	#marker;
-	#maxWriteAttempts;
-	#minWriteIntervalMs;
-	#now;
-	#retryBaseDelayMs;
-	#sleep;
-	#initialRowsByKey = /* @__PURE__ */ new Map();
-	#currentInputRowsByKey = /* @__PURE__ */ new Map();
-	#comment;
-	#currentRows;
-	#lastMutativeWriteAt;
-	#lastUpsertResult;
-	#writeQueue = Promise.resolve();
-	constructor(options) {
-		this.#client = options.client;
-		this.#comment = options.comment;
-		this.#existingRows = options.existingRows;
-		this.#footer = options.footer;
-		this.#header = options.header;
-		this.#inputOrder = uniqueStrings(options.inputOrder);
-		this.#marker = options.marker;
-		this.#maxWriteAttempts = options.maxWriteAttempts ?? DEFAULT_MAX_WRITE_ATTEMPTS;
-		this.#minWriteIntervalMs = options.minWriteIntervalMs ?? DEFAULT_MIN_WRITE_INTERVAL_MS;
-		this.#now = options.now ?? Date.now;
-		this.#retryBaseDelayMs = options.retryBaseDelayMs ?? DEFAULT_RETRY_BASE_DELAY_MS;
-		this.#sleep = options.sleep ?? sleep;
-		this.#currentRows = options.existingRows;
-		for (const row of options.existingRows) this.#initialRowsByKey.set(buildDeploymentRowKey(row.projectId, row.environment), row);
-	}
-	async publishInitialRows(rows) {
-		this.#replaceCurrentInputRows(rows);
-		this.#queueCurrentStateWrite();
-		return this.flush();
-	}
-	updateRow(row) {
-		this.#currentInputRowsByKey.set(buildDeploymentRowKey(row.projectId, row.environment), row);
-		this.#queueCurrentStateWrite();
-	}
-	restoreRow(projectId, environment) {
-		const key = buildDeploymentRowKey(projectId, environment);
-		const initialRow = this.#initialRowsByKey.get(key);
-		if (initialRow) this.#currentInputRowsByKey.set(key, initialRow);
-		else this.#currentInputRowsByKey.delete(key);
-		this.#queueCurrentStateWrite();
-	}
-	async flush() {
-		await this.#writeQueue;
-		if (!this.#lastUpsertResult) throw new Error("Managed comment writer has not published a comment yet.");
-		return this.#lastUpsertResult;
-	}
-	#replaceCurrentInputRows(rows) {
-		this.#currentInputRowsByKey.clear();
-		for (const row of rows) this.#currentInputRowsByKey.set(buildDeploymentRowKey(row.projectId, row.environment), row);
-	}
-	#queueCurrentStateWrite() {
-		this.#currentRows = this.#renderCurrentRows();
-		const body = renderDeploymentComment({
-			footer: this.#footer,
-			header: this.#header,
-			marker: this.#marker,
-			rows: this.#currentRows
-		});
-		this.#writeQueue = this.#writeQueue.then(() => this.#writeBody(body));
-		this.#writeQueue.catch(() => {});
-	}
-	#renderCurrentRows() {
-		return upsertDeploymentCommentRows(this.#existingRows, this.#getCurrentInputRows(), this.#inputOrder);
-	}
-	#getCurrentInputRows() {
-		const rows = [];
-		for (const key of this.#inputOrder) {
-			const row = this.#currentInputRowsByKey.get(key);
-			if (row) rows.push(row);
-		}
-		return rows;
-	}
-	async #writeBody(body) {
-		const result = await this.#writeBodyWithRetry(body);
-		this.#comment = {
-			...this.#comment ?? {},
-			body,
-			html_url: result.htmlUrl,
-			id: result.id
-		};
-		this.#lastUpsertResult = result;
-	}
-	async #writeBodyWithRetry(body) {
-		for (let attempt = 1; attempt <= this.#maxWriteAttempts; attempt += 1) {
-			await this.#waitForMutativeWriteSlot();
-			try {
-				return this.#comment ? await this.#client.updatePullRequestComment(this.#comment.id, body) : await this.#client.createPullRequestComment(body);
-			} catch (error) {
-				const recoveredResult = await this.#recoverWrite(body);
-				if (recoveredResult) return recoveredResult;
-				if (attempt >= this.#maxWriteAttempts || !isRetryableGitHubWriteError(error)) throw error;
-				await this.#sleep(this.#retryDelayForAttempt(attempt));
-			}
-		}
-		throw new Error("Managed comment writer exhausted all write attempts.");
-	}
-	async #recoverWrite(body) {
-		if (this.#comment) return this.#recoverUpdatedComment(body, this.#comment.id);
-		return this.#recoverCreatedComment(body);
-	}
-	async #recoverUpdatedComment(body, commentId) {
-		try {
-			const refreshedComment = await this.#client.getPullRequestComment(commentId);
-			if ((refreshedComment.body ?? "") !== body) return;
-			this.#comment = {
-				...refreshedComment,
-				body
-			};
-			return {
-				action: "updated",
-				htmlUrl: refreshedComment.html_url,
-				id: refreshedComment.id
-			};
-		} catch {
-			return;
-		}
-	}
-	async #recoverCreatedComment(body) {
-		try {
-			const existingComment = await this.#client.findExistingActionComment(buildCommentMarker(this.#marker));
-			if (!existingComment || (existingComment.body ?? "") !== body) return;
-			this.#comment = {
-				...existingComment,
-				body
-			};
-			return {
-				action: "created",
-				htmlUrl: existingComment.html_url,
-				id: existingComment.id
-			};
-		} catch {
-			return;
-		}
-	}
-	async #waitForMutativeWriteSlot() {
-		if (this.#lastMutativeWriteAt === void 0) {
-			this.#lastMutativeWriteAt = this.#now();
-			return;
-		}
-		const elapsed = this.#now() - this.#lastMutativeWriteAt;
-		if (elapsed < this.#minWriteIntervalMs) await this.#sleep(this.#minWriteIntervalMs - elapsed);
-		this.#lastMutativeWriteAt = this.#now();
-	}
-	#retryDelayForAttempt(attempt) {
-		return this.#retryBaseDelayMs * 2 ** (attempt - 1);
-	}
-};
-function isRetryableGitHubWriteError(error) {
-	if (!(error instanceof GitHubApiError)) return true;
-	return Boolean(error.status && RETRYABLE_GITHUB_STATUS_CODES.has(error.status));
-}
-function uniqueStrings(values) {
-	return Array.from(new Set(values));
-}
-function sleep(milliseconds) {
-	return new Promise((resolve) => {
-		setTimeout(resolve, milliseconds);
-	});
-}
-//#endregion
-//#region src/shared/concurrency.ts
-async function mapWithConcurrencyLimit(items, concurrency, mapItem) {
-	if (!Number.isInteger(concurrency) || concurrency < 1) throw new Error("concurrency must be a positive integer.");
-	if (items.length === 0) return [];
-	const results = new Array(items.length);
-	const workerCount = Math.min(concurrency, items.length);
-	let nextIndex = 0;
-	let hasError = false;
-	let firstError;
-	async function runWorker() {
-		while (true) {
-			if (hasError) return;
-			const currentIndex = nextIndex;
-			if (currentIndex >= items.length) return;
-			nextIndex += 1;
-			try {
-				results[currentIndex] = await mapItem(items[currentIndex], currentIndex);
-			} catch (error) {
-				if (!hasError) {
-					hasError = true;
-					firstError = error;
-				}
-				return;
-			}
-		}
-	}
-	await Promise.all(Array.from({ length: workerCount }, () => runWorker()));
-	if (hasError) throw firstError;
-	return results;
-}
-//#endregion
-//#region src/vercel/deployment.ts
-const VERCEL_BINARY = "vercel";
-const EXCLUDED_WORKSPACE_ENTRY_NAMES = new Set([".git", ".vercel"]);
-const ACTION_INPUT_ENV_PREFIX = "INPUT_";
-var VercelDeployError = class extends Error {
-	step;
-	exitCode;
-	deploymentUrl;
-	constructor(message, step, exitCode, deploymentUrl) {
-		super(message);
-		this.step = step;
-		this.exitCode = exitCode;
-		this.deploymentUrl = deploymentUrl;
-		this.name = "VercelDeployError";
-	}
-};
-async function runVercelDeploy(options) {
-	const sourceDirectory = resolve(options.deployment.cwd);
-	const tempWorkspace = await mkdtemp(join(tmpdir(), "vercel-deploy-comment-"));
-	try {
-		await copyWorkspace(sourceDirectory, tempWorkspace);
-		await writeProjectSettings(tempWorkspace, options.deployment.projectId, options.deployment.orgId);
-		await runVercelStep({
-			exec: options.exec,
-			cwd: tempWorkspace,
-			step: "pull",
-			passToken: true,
-			token: options.token,
-			args: [
-				"pull",
-				"--yes",
-				"--environment",
-				options.deployment.environment
-			]
-		});
-		await runVercelStep({
-			exec: options.exec,
-			cwd: tempWorkspace,
-			step: "build",
-			token: options.token,
-			args: ["build", "--yes"]
-		});
-		const deploymentUrl = extractDeploymentUrl(await runVercelStep({
-			exec: options.exec,
-			cwd: tempWorkspace,
-			step: "deploy",
-			passToken: true,
-			token: options.token,
-			args: ["deploy", "--prebuilt"],
-			captureStdout: true
-		}));
-		if (!deploymentUrl) throw new VercelDeployError("Vercel deploy did not print a deployment URL to stdout.", "deploy");
-		return deploymentUrl;
-	} finally {
-		await rm(tempWorkspace, {
-			recursive: true,
-			force: true
-		});
-	}
-}
-/**
-* `vercel pull`, `vercel build`, and `vercel deploy --prebuilt` run inside an
-* isolated temp workspace rather than the repository checkout.
-*
-* The exclude list intentionally stays narrow. Heavy top-level directories
-* such as `node_modules` may be copied when `cwd` points at the repo root,
-* which can increase temp workspace size and deployment latency. We do not
-* exclude those entries by default because `vercel build` runs inside the
-* copied workspace, and changing the default copy set can change build
-* behavior for projects that expect the full workspace contents under `cwd`.
-*
-* See:
-* * `README.md` Usage / deploy-and-comment steps
-* * `docs/spec.md` Runtime Design > Deploy Execution
-* * https://vercel.com/docs/cli/build
-* * https://vercel.com/docs/deployments/configure-a-build
-*/
-async function copyWorkspace(sourceDirectory, destinationDirectory) {
-	const entries = await readdir(sourceDirectory, { withFileTypes: true });
-	for (const entry of entries) {
-		if (EXCLUDED_WORKSPACE_ENTRY_NAMES.has(entry.name)) continue;
-		await cp(join(sourceDirectory, entry.name), join(destinationDirectory, entry.name), { recursive: true });
-	}
-}
-async function writeProjectSettings(workspaceDirectory, projectId, orgId) {
-	const vercelDirectory = join(workspaceDirectory, ".vercel");
-	const projectFile = join(vercelDirectory, "project.json");
-	await mkdir(vercelDirectory, { recursive: true });
-	await writeFile(projectFile, `${JSON.stringify({
-		projectId,
-		orgId
-	}, null, 2)}\n`, "utf8");
-}
-async function runVercelStep(options) {
-	let stdout = "";
-	const exitCode = await options.exec(VERCEL_BINARY, options.args, {
-		cwd: options.cwd,
-		env: buildVercelEnvironment(options.passToken ? options.token : void 0),
-		ignoreReturnCode: true,
-		listeners: options.captureStdout ? { stdout: (data) => {
-			stdout += data.toString("utf8");
-		} } : void 0
-	});
-	if (exitCode !== 0) throw new VercelDeployError(`Vercel ${options.step} failed with exit code ${exitCode}.`, options.step, exitCode, options.step === "deploy" ? extractDeploymentUrl(stdout) : void 0);
-	return stdout;
-}
-function buildVercelEnvironment(token) {
-	const env = Object.assign({}, process.env);
-	for (const key of Object.keys(env)) if (key.startsWith(ACTION_INPUT_ENV_PREFIX)) delete env[key];
-	delete env.VERCEL_TOKEN;
-	if (token) env.VERCEL_TOKEN = token;
-	return env;
-}
-function extractDeploymentUrl(stdout) {
-	const lastMatch = stdout.match(/https?:\/\/[^\s<>"']+/g)?.at(-1);
-	if (!lastMatch) return;
-	return lastMatch.replace(/[),.;]+$/g, "");
-}
-async function getVercelProjectDetails(options) {
-	return requestVercelApi(buildVercelApiUrl(`/v9/projects/${encodeURIComponent(options.projectId)}`, options), options.token, options.fetch);
-}
-async function getVercelDeploymentDetails(options) {
-	const idOrUrl = deploymentUrlToIdOrHost(options.deploymentUrl);
-	const apiUrl = buildVercelApiUrl(`/v13/deployments/${encodeURIComponent(idOrUrl)}`, options);
-	apiUrl.searchParams.set("withGitRepoInfo", "true");
-	return requestVercelApi(apiUrl, options.token, options.fetch);
-}
-function toHttpUrl(value) {
-	if (/^https?:\/\//i.test(value)) return new URL(value).toString();
-	return new URL(`https://${value}`).toString();
-}
-function buildVercelApiUrl(pathname, searchParams = {}) {
-	const apiUrl = new URL(pathname, "https://api.vercel.com");
-	if (searchParams.teamId) apiUrl.searchParams.set("teamId", searchParams.teamId);
-	if (searchParams.slug) apiUrl.searchParams.set("slug", searchParams.slug);
-	return apiUrl;
-}
-async function requestVercelApi(url, token, fetchImplementation) {
-	const response = await fetchImplementation(url, { headers: {
-		Authorization: `Bearer ${token}`,
-		"User-Agent": "vercel-deploy-comment"
-	} });
-	if (!response.ok) throw new Error(`Vercel API request failed with status ${response.status} ${response.statusText}.`);
-	return await response.json();
-}
-function deploymentUrlToIdOrHost(value) {
-	return new URL(value).hostname;
 }
 //#endregion
 //#region src/shared/types.ts
@@ -18848,249 +18391,30 @@ function toError(error) {
 const CANCEL_HANDLING_TARGET_STATE = "cancel-handling-target";
 const INITIAL_ROWS_PUBLISHED_STATE = "initial-rows-published";
 const MAIN_COMPLETED_STATE = "main-completed";
-function saveCancelHandlingTarget(isTarget) {
-	saveState(CANCEL_HANDLING_TARGET_STATE, String(isTarget));
+function readCancelHandlingState(readState = getState) {
+	return {
+		cancelHandlingTarget: readBooleanState(readState, CANCEL_HANDLING_TARGET_STATE),
+		initialRowsPublished: readBooleanState(readState, INITIAL_ROWS_PUBLISHED_STATE),
+		mainCompleted: readBooleanState(readState, MAIN_COMPLETED_STATE)
+	};
 }
-function saveInitialRowsPublished() {
-	saveState(INITIAL_ROWS_PUBLISHED_STATE, "true");
-}
-function saveMainCompleted() {
-	saveState(MAIN_COMPLETED_STATE, "true");
+function readBooleanState(readState, name) {
+	return readState(name) === "true";
 }
 //#endregion
 //#region src/action/run.ts
-async function runActionMain() {
+async function runActionPost() {
 	const { client, inputs, runUrl } = initializeActionRuntime();
-	saveCancelHandlingTarget(inputs.mode === "deploy-and-comment");
+	const cancelHandlingState = readCancelHandlingState();
 	try {
-		const { buildRowsResult, comment } = inputs.mode === "deploy-and-comment" ? await runDeployAndComment(client, inputs, runUrl) : await runCommentOnly(client, inputs, runUrl);
-		if (inputs.mode === "deploy-and-comment" && !buildRowsResult.deployFailure) saveMainCompleted();
-		setOutput("comment-id", String(comment.id));
-		setOutput("comment-url", comment.htmlUrl);
-		setOutput("deployment-urls", JSON.stringify(buildRowsResult.deploymentUrls));
-		setOutput("statuses", JSON.stringify(buildRowsResult.statusKeys));
-		info(`Pull request comment ${comment.action}: ${comment.htmlUrl}`);
-		if (buildRowsResult.deployFailure) throw buildRowsResult.deployFailure;
+		if (inputs.mode !== "deploy-and-comment" || !cancelHandlingState.cancelHandlingTarget || !cancelHandlingState.initialRowsPublished || cancelHandlingState.mainCompleted) return;
+		await publishCancelledRowsForCurrentInvocation(client, inputs, runUrl);
 	} catch (error) {
 		throw new Error(sanitizeErrorMessage(error, inputs), { cause: toError(error) });
 	}
 }
-async function resolveOptionalMetadata(resolveValue, inputs) {
-	try {
-		return await resolveValue();
-	} catch (error) {
-		warning(sanitizeErrorMessage(error, inputs));
-		return;
-	}
-}
 function buildRowKey(deployment) {
 	return buildDeploymentRowKey(deployment.projectId, deployment.environment);
-}
-function getProjectName(deployment, projectDetails, deploymentDetails) {
-	if (deployment.displayName) return deployment.displayName;
-	if (projectDetails?.name) return projectDetails.name;
-	if (deploymentDetails?.project?.name) return deploymentDetails.project.name;
-	if (deploymentDetails?.name) return deploymentDetails.name;
-	return deployment.projectId;
-}
-function getPreviewUrl(deploymentUrl, deploymentDetails) {
-	const rawUrl = deploymentDetails?.url ?? deploymentUrl;
-	return rawUrl ? toHttpUrl(rawUrl) : void 0;
-}
-function getDeploymentUrlFromError(error) {
-	if (typeof error === "object" && error !== null && "deploymentUrl" in error) {
-		const deploymentUrl = error.deploymentUrl;
-		return typeof deploymentUrl === "string" ? deploymentUrl : void 0;
-	}
-}
-async function runDeployAndComment(client, inputs, runUrl) {
-	const snapshot = await readManagedCommentSnapshot(client, inputs.commentMarker);
-	const writer = new ManagedCommentWriter({
-		client,
-		comment: snapshot.comment,
-		existingRows: snapshot.rows,
-		footer: inputs.footer,
-		header: inputs.header,
-		inputOrder: inputs.deployments.map((deployment) => buildRowKey(deployment)),
-		marker: inputs.commentMarker
-	});
-	await writer.publishInitialRows(buildInProgressRows(inputs.deployments, runUrl, (/* @__PURE__ */ new Date()).toISOString()));
-	saveInitialRowsPublished();
-	let buildRowsResult;
-	let buildFailure;
-	try {
-		buildRowsResult = await buildDeployAndCommentRows(inputs, runUrl, writer);
-	} catch (error) {
-		buildFailure = error;
-	}
-	let comment;
-	try {
-		comment = await writer.flush();
-	} catch (error) {
-		if (buildFailure) throw combineErrors(buildFailure, error, "failed to flush managed pull request comment updates");
-		throw error;
-	}
-	if (buildFailure) throw buildFailure;
-	if (!buildRowsResult) throw new Error("Managed deploy run did not produce comment rows.");
-	return {
-		buildRowsResult,
-		comment
-	};
-}
-async function runCommentOnly(client, inputs, runUrl) {
-	const buildRowsResult = await buildCommentOnlyRows(inputs, runUrl);
-	return {
-		buildRowsResult,
-		comment: await writeManagedCommentRows(client, inputs, buildRowsResult.nextRows)
-	};
-}
-async function buildDeployAndCommentRows(inputs, runUrl, writer) {
-	const deploymentResults = await mapWithConcurrencyLimit(inputs.deployments, inputs.deploymentConcurrency, async (deployment, index) => {
-		if (deployment === void 0) throw new Error(`deployments[${index}] is missing.`);
-		let deploymentUrl = deployment.deploymentUrl;
-		let deploymentFailed = false;
-		let deployFailure;
-		try {
-			deploymentUrl = await runVercelDeploy({
-				deployment,
-				token: inputs.vercelToken,
-				exec
-			});
-		} catch (error) {
-			deploymentFailed = true;
-			deployFailure = toError(error);
-			deploymentUrl = getDeploymentUrlFromError(error) ?? deploymentUrl;
-			warning(sanitizeErrorMessage(error, inputs));
-			if (!inputs.commentOnFailure) {
-				writer.restoreRow(deployment.projectId, deployment.environment);
-				throw error;
-			}
-		}
-		const { projectDetails, deploymentDetails } = await resolveDeploymentMetadata(inputs, deployment, deploymentUrl);
-		const builtRowResult = buildDeploymentRowResult({
-			deployment,
-			deploymentDetails,
-			deploymentFailed,
-			deploymentUrl,
-			actionStatus: inputs.status,
-			projectDetails,
-			runUrl,
-			updatedAtUtc: (/* @__PURE__ */ new Date()).toISOString()
-		});
-		writer.updateRow(builtRowResult.row);
-		return {
-			builtRowResult,
-			deployFailure
-		};
-	});
-	const nextRows = [];
-	const deploymentUrls = [];
-	const statusKeys = [];
-	let deployFailure;
-	for (const result of deploymentResults) {
-		appendBuiltDeploymentRowResult({
-			nextRows,
-			deploymentUrls,
-			statusKeys
-		}, result.builtRowResult);
-		deployFailure ??= result.deployFailure;
-	}
-	return {
-		nextRows,
-		deploymentUrls,
-		statusKeys,
-		deployFailure
-	};
-}
-async function buildCommentOnlyRows(inputs, runUrl) {
-	const updatedAtUtc = (/* @__PURE__ */ new Date()).toISOString();
-	const nextRows = [];
-	const deploymentUrls = [];
-	const statusKeys = [];
-	for (const deployment of inputs.deployments) {
-		const deploymentUrl = deployment.deploymentUrl;
-		const { projectDetails, deploymentDetails } = await resolveDeploymentMetadata(inputs, deployment, deploymentUrl);
-		appendBuiltDeploymentRowResult({
-			nextRows,
-			deploymentUrls,
-			statusKeys
-		}, buildDeploymentRowResult({
-			deployment,
-			deploymentUrl,
-			deploymentStatus: deployment.status,
-			deploymentDetails,
-			projectDetails,
-			deploymentFailed: false,
-			actionStatus: inputs.status,
-			runUrl,
-			updatedAtUtc
-		}));
-	}
-	return {
-		nextRows,
-		deploymentUrls,
-		statusKeys
-	};
-}
-async function resolveDeploymentMetadata(inputs, deployment, deploymentUrl) {
-	if (!inputs.vercelToken) return {};
-	const metadataToken = inputs.vercelToken;
-	return {
-		projectDetails: await resolveOptionalMetadata(() => getVercelProjectDetails({
-			projectId: deployment.projectId,
-			token: metadataToken,
-			teamId: deployment.teamId,
-			slug: deployment.slug,
-			fetch
-		}), inputs),
-		deploymentDetails: deploymentUrl ? await resolveOptionalMetadata(() => getVercelDeploymentDetails({
-			deploymentUrl,
-			token: metadataToken,
-			teamId: deployment.teamId,
-			slug: deployment.slug,
-			fetch
-		}), inputs) : void 0
-	};
-}
-function buildDeploymentRowResult(options) {
-	const previewUrl = getPreviewUrl(options.deploymentUrl, options.deploymentDetails);
-	const status = resolveDisplayStatus({
-		deploymentStatus: options.deploymentStatus,
-		vercelReadyState: options.deploymentDetails?.readyState,
-		actionStatus: options.deploymentFailed ? "failure" : options.actionStatus
-	});
-	return {
-		row: {
-			environment: options.deployment.environment,
-			projectId: options.deployment.projectId,
-			projectName: getProjectName(options.deployment, options.projectDetails, options.deploymentDetails),
-			projectUrl: options.deployment.projectUrl,
-			previewUrl,
-			runUrl: options.runUrl,
-			status,
-			updatedAtUtc: options.updatedAtUtc
-		},
-		previewUrl,
-		statusKey: status.key
-	};
-}
-function buildInProgressRows(deployments, runUrl, updatedAtUtc) {
-	const status = getInProgressDisplayStatus();
-	return deployments.map((deployment) => ({
-		environment: deployment.environment,
-		projectId: deployment.projectId,
-		projectName: getProjectName(deployment, void 0, void 0),
-		projectUrl: deployment.projectUrl,
-		previewUrl: deployment.deploymentUrl,
-		runUrl,
-		status,
-		updatedAtUtc
-	}));
-}
-function appendBuiltDeploymentRowResult(target, result) {
-	target.nextRows.push(result.row);
-	if (result.previewUrl) target.deploymentUrls.push(result.previewUrl);
-	target.statusKeys.push(result.statusKey);
 }
 async function readManagedCommentSnapshot(client, commentMarker) {
 	const comment = await client.findExistingActionComment(buildCommentMarker(commentMarker));
@@ -19098,15 +18422,6 @@ async function readManagedCommentSnapshot(client, commentMarker) {
 		comment,
 		rows: parseDeploymentCommentRows(comment?.body ?? "")
 	};
-}
-async function writeManagedCommentRows(client, inputs, nextRows, snapshot) {
-	const existingCommentSnapshot = snapshot ?? await readManagedCommentSnapshot(client, inputs.commentMarker);
-	const body = renderManagedCommentBody(inputs, existingCommentSnapshot.rows, nextRows);
-	if (existingCommentSnapshot.comment) return client.updatePullRequestComment(existingCommentSnapshot.comment.id, body);
-	return client.createPullRequestComment(body);
-}
-function renderManagedCommentBody(inputs, existingRows, nextRows) {
-	return renderManagedCommentWithRows(inputs, upsertDeploymentCommentRows(existingRows, nextRows, inputs.deployments.map((deployment) => buildRowKey(deployment))));
 }
 function renderManagedCommentWithRows(inputs, rows) {
 	return renderDeploymentComment({
@@ -19116,16 +18431,30 @@ function renderManagedCommentWithRows(inputs, rows) {
 		rows
 	});
 }
-function combineErrors(primaryError, secondaryError, secondaryContext) {
-	const normalizedPrimaryError = toError(primaryError);
-	const normalizedSecondaryError = toError(secondaryError);
-	const contextualizedSecondaryError = new Error(`${secondaryContext}: ${normalizedSecondaryError.message}`, { cause: normalizedSecondaryError });
-	return new AggregateError([normalizedPrimaryError, contextualizedSecondaryError], `${normalizedPrimaryError.message}; ${secondaryContext}: ${normalizedSecondaryError.message}`, { cause: normalizedPrimaryError });
+async function publishCancelledRowsForCurrentInvocation(client, inputs, runUrl) {
+	const snapshot = await readManagedCommentSnapshot(client, inputs.commentMarker);
+	if (!snapshot.comment) return;
+	const targetRowKeys = new Set(inputs.deployments.map((deployment) => buildRowKey(deployment)));
+	const cancelledStatus = getCancelledDisplayStatus();
+	const updatedAtUtc = (/* @__PURE__ */ new Date()).toISOString();
+	let changed = false;
+	const rows = snapshot.rows.map((row) => {
+		if (!targetRowKeys.has(buildDeploymentRowKey(row.projectId, row.environment)) || row.status.key !== "in_progress") return row;
+		changed = true;
+		return {
+			...row,
+			runUrl,
+			status: cancelledStatus,
+			updatedAtUtc
+		};
+	});
+	if (!changed) return;
+	await client.updatePullRequestComment(snapshot.comment.id, renderManagedCommentWithRows(inputs, rows));
 }
 //#endregion
-//#region src/main.ts
+//#region src/post.ts
 async function run() {
-	await runActionMain();
+	await runActionPost();
 }
 function isDirectRun() {
 	return Boolean(process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href);

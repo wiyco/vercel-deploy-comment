@@ -10,6 +10,7 @@ coverage/
 # Keep only the ESM bundle used by action.yml
 dist/*
 !dist/index.js
+!dist/post.js
 
 .vscode/*
 !.vscode/settings.json

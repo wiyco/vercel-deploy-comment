@@ -93,6 +93,8 @@ vercel deploy --prebuilt
 >
 > `deploy-and-comment` entries in one action invocation run in parallel up to `deployment-concurrency` at a time. Before the deploys start, the action performs one managed comment create-or-update with `In Progress` rows for the current input. As each row resolves, one in-process comment writer serializes a full-body update for that row against the same managed comment.
 >
+> If GitHub Actions cancels that invocation through the normal cancellation path and still runs the action `post` hook, the action re-reads the managed comment and converts only the current invocation's rows whose comment status is still `in_progress` to `cancelled`. Callers do not need an extra workflow step for this cleanup.
+>
 > This design makes same-`cwd`, multi-project and multi-environment deployments safe because local `.vercel` state is not shared between rows.
 >
 > `vercel build --yes` executes inside the workflow runner's temp workspace, not on Vercel's remote build machine. Build success therefore depends on runner CPU and memory capacity together with `deployment-concurrency` and the project build size. On undersized runners, multiple parallel builds can terminate with `SIGKILL` or a generic failed job without a definitive OOM signal.
@@ -171,6 +173,7 @@ When updating the PR comment, the action:
 4. Keeps the fetched row snapshot in memory for the rest of the run and replaces or inserts only the rows named in the current `deployments` input.
 5. Preserves unrelated existing rows from the startup snapshot.
 6. Re-renders the entire managed comment body for each queued row update without re-reading the full comment before every row.
+7. On normal GitHub Actions cancellation, the `post` hook re-reads the managed comment and updates only the current invocation rows that are still rendered as `in_progress`; it does not create a new comment if the initial `In Progress` publish never succeeded.
 
 ### Concurrency
 
@@ -223,6 +226,8 @@ Explicit `comment-only` `deployments[].status` is preferred when set. Otherwise 
 
 - If `pull`, `build`, or `deploy` fails and `comment-on-failure` is `true`, the action still publishes the affected row with failure status, flushes queued row writes, then fails the action.
 - If `comment-on-failure` is `false`, the action restores only the failed row to its startup snapshot state, or removes that row if it did not exist before the run. Other already-published row updates remain in the managed comment.
+- If a `deploy-and-comment` invocation is cancelled through the normal GitHub Actions path after the initial `In Progress` publish succeeds, the action `post` hook converts only that invocation's remaining `In Progress` rows to `Cancelled`. Rows already rendered as `Ready`, `Failed`, `Skipped`, `Cancelled`, or `Unknown` are preserved.
+- Automatic cancel reflection is best-effort and does not cover termination paths where GitHub never runs the action `post` hook, such as runner loss or GitHub REST `force-cancel`.
 - If a managed-comment write ultimately fails after retries, the action fails and leaves the last successfully published managed-comment body in place. It does not delete or restore the whole comment.
 - Vercel API enrichment failures do not block comment updates.
 

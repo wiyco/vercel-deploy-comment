@@ -94,7 +94,13 @@ For each `deploy-and-comment` entry, the action:
 >
 > Multiple `deploy-and-comment` entries within one action invocation run in parallel up to `deployment-concurrency` at a time. Before the deploys start, the managed PR comment is upserted with `In Progress` rows for the current input. As each row resolves, a single in-process writer serializes the managed comment updates for that run and publishes the latest row state.
 >
+> When a `deploy-and-comment` run is cancelled through the normal GitHub Actions cancellation flow, this action's `post` hook updates only the current invocation's still-`In Progress` rows to `Cancelled`. Callers do not need an extra `if: cancelled()` step for that managed comment cleanup.
+>
 > Each row uses an isolated temp workspace, so repo-local `.vercel` state is not shared across projects or environments, including multiple rows that point at the same source `cwd`.
+
+> [!NOTE]
+>
+> Automatic cancel reflection is best-effort. It depends on GitHub Actions running the action `post` hook, so `force-cancel` style termination or runner loss is outside the guarantee. `comment-only` mode is unchanged and is not part of this automatic cancellation behavior.
 
 > [!WARNING]
 >
@@ -204,6 +210,7 @@ Pass `vercel-token` in `comment-only` mode when you want Vercel API enrichment f
 
 - The action stores one hidden comment marker for the whole comment and one hidden marker per row. Row updates are scoped to `projectId + environment`.
 - Rows included in the current `deployments` input are rendered in input order. Existing rows not included in the current run stay in the comment.
+- `deploy-and-comment` automatically converts only this invocation's remaining `In Progress` rows to `Cancelled` during the normal GitHub Actions cancellation path. Rows already updated to `Ready`, `Failed`, or other terminal states are left as-is.
 - The exact GitHub and Vercel APIs used by the action are documented in [docs/spec.md#external-api-usage](docs/spec.md#external-api-usage).
 - `issues: write` or `pull-requests: write` is required for the managed pull request comment. See [docs/spec.md#required-workflow-permissions](docs/spec.md#required-workflow-permissions).
 

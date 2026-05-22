@@ -1,10 +1,10 @@
 import { pathToFileURL } from "node:url";
 import * as core from "@actions/core";
-import { runActionMain } from "./action/run";
+import { runActionPost } from "./action/run";
 import { toError } from "./action/runtime";
 
 export async function run(): Promise<void> {
-  await runActionMain();
+  await runActionPost();
 }
 
 function isDirectRun(): boolean {

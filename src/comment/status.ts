@@ -52,6 +52,10 @@ export function getInProgressDisplayStatus(): DisplayStatus {
   return IN_PROGRESS;
 }
 
+export function getCancelledDisplayStatus(): DisplayStatus {
+  return CANCELLED;
+}
+
 export function resolveDisplayStatus(
   options: ResolveStatusOptions,
 ): DisplayStatus {

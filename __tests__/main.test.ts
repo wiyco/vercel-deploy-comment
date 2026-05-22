@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const info = vi.fn();
+const saveState = vi.fn();
 const setFailed = vi.fn();
 const setOutput = vi.fn();
 const setSecret = vi.fn();
@@ -40,6 +41,7 @@ const toHttpUrl = vi.fn();
 
 vi.mock("@actions/core", () => ({
   info,
+  saveState,
   setFailed,
   setOutput,
   setSecret,
@@ -380,6 +382,9 @@ describe("run", () => {
         "ready",
       ]),
     );
+    expect(saveState).toHaveBeenCalledWith("cancel-handling-target", "true");
+    expect(saveState).toHaveBeenCalledWith("initial-rows-published", "true");
+    expect(saveState).toHaveBeenCalledWith("main-completed", "true");
   });
 
   it("publishes failed rows when comment-on-failure is true and then fails the action", async () => {
@@ -424,6 +429,9 @@ describe("run", () => {
         "failed",
       ]),
     );
+    expect(saveState).toHaveBeenCalledWith("cancel-handling-target", "true");
+    expect(saveState).toHaveBeenCalledWith("initial-rows-published", "true");
+    expect(saveState).not.toHaveBeenCalledWith("main-completed", "true");
   });
 
   it("emits non-ready status keys for comment-only rows when Vercel readyState or fallback status differs", async () => {
@@ -513,6 +521,11 @@ describe("run", () => {
         "skipped",
         "unknown",
       ]),
+    );
+    expect(saveState).toHaveBeenCalledWith("cancel-handling-target", "false");
+    expect(saveState).not.toHaveBeenCalledWith(
+      "initial-rows-published",
+      "true",
     );
   });
 

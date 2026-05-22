@@ -265,4 +265,4 @@ permissions:
 - `deploy-and-comment` writes `In Progress` rows before starting work and replaces them with final statuses after row resolution.
 - Custom environments trigger the `Environment` column for all rows.
 - Deploy failures can still update the comment when `comment-on-failure` is `true`.
-- The implementation passes typecheck, lint, tests, and build.
+- The implementation passes typecheck, lint, tests, code coverage, and build.

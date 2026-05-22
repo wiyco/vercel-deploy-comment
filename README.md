@@ -152,6 +152,26 @@ Top-level inputs:
 
 ## Comment-only Mode
 
+Use this form when you already know the `deploymentUrl` and final `status` and do not need Vercel API enrichment:
+
+```yaml
+- uses: wiyco/vercel-deploy-comment@v2
+  with:
+    mode: comment-only
+    deployments: |
+      [
+        {
+          "projectId": "prj_web",
+          "environment": "preview",
+          "projectUrl": "https://vercel.com/my-team/web",
+          "deploymentUrl": "https://web-git-feature-my-team.vercel.app",
+          "status": "ready"
+        }
+      ]
+```
+
+Pass `vercel-token` in `comment-only` mode when you want Vercel API enrichment for the project name or deployment status:
+
 ```yaml
 - uses: wiyco/vercel-deploy-comment@v2
   with:
@@ -163,8 +183,7 @@ Top-level inputs:
           "projectId": "prj_web",
           "environment": "preview",
           "projectUrl": "https://vercel.com/my-team/web",
-          "deploymentUrl": "https://web-git-feature-my-team.vercel.app",
-          "status": "ready"
+          "deploymentUrl": "https://web-git-feature-my-team.vercel.app"
         }
       ]
 ```

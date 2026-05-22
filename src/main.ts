@@ -12,6 +12,7 @@ import {
   getInProgressDisplayStatus,
   resolveDisplayStatus,
 } from "./comment/status";
+import { ManagedCommentWriter } from "./comment/writer";
 import {
   buildRunUrl,
   GitHubClient,
@@ -50,62 +51,10 @@ export async function run(): Promise<void> {
     const context = readGitHubRuntimeContext();
     const runUrl = buildRunUrl(context);
     const client = new GitHubClient(inputs.githubToken, context);
-    let pendingCommentRollbackState: PendingCommentRollbackState | undefined;
-
-    if (inputs.mode === "deploy-and-comment") {
-      const existingCommentSnapshot = await readManagedCommentSnapshot(
-        client,
-        inputs.commentMarker,
-      );
-      const pendingComment = await writeManagedCommentRows(
-        client,
-        inputs,
-        buildInProgressRows(
-          inputs.deployments,
-          runUrl,
-          new Date().toISOString(),
-        ),
-        existingCommentSnapshot,
-      );
-
-      pendingCommentRollbackState = {
-        pendingCommentId: pendingComment.id,
-        previousComment: existingCommentSnapshot.comment,
-      };
-    }
-
-    let buildRowsResult: BuildRowsResult;
-
-    try {
-      buildRowsResult =
-        inputs.mode === "deploy-and-comment"
-          ? await buildDeployAndCommentRows(inputs, runUrl)
-          : await buildCommentOnlyRows(inputs, runUrl);
-    } catch (error) {
-      await rollbackPendingCommentUpdate(
-        client,
-        pendingCommentRollbackState,
-        inputs,
-      );
-      throw error;
-    }
-
-    let comment: UpsertCommentResult;
-
-    try {
-      comment = await writeManagedCommentRows(
-        client,
-        inputs,
-        buildRowsResult.nextRows,
-      );
-    } catch (error) {
-      await rollbackPendingCommentUpdate(
-        client,
-        pendingCommentRollbackState,
-        inputs,
-      );
-      throw error;
-    }
+    const { buildRowsResult, comment } =
+      inputs.mode === "deploy-and-comment"
+        ? await runDeployAndComment(client, inputs, runUrl)
+        : await runCommentOnly(client, inputs, runUrl);
 
     core.setOutput("comment-id", String(comment.id));
     core.setOutput("comment-url", comment.htmlUrl);
@@ -227,33 +176,111 @@ interface ManagedCommentSnapshot {
   rows: DeploymentCommentRow[];
 }
 
-interface PendingCommentRollbackState {
-  pendingCommentId: number;
-  previousComment?: IssueComment;
-}
-
 interface BuiltDeploymentRowResult {
   row: DeploymentCommentRow;
   previewUrl?: string;
   statusKey: string;
 }
 
-interface ResolvedDeploymentResult {
-  deployment: BaseDeploymentInput;
-  deploymentUrl: string | undefined;
-  deploymentDetails?: VercelDeploymentDetails;
-  projectDetails?: VercelProjectDetails;
-  deploymentFailed: boolean;
+interface ResolvedDeploymentRowResult {
+  builtRowResult: BuiltDeploymentRowResult;
   deployFailure?: Error;
+}
+
+async function runDeployAndComment(
+  client: GitHubClient,
+  inputs: DeployAndCommentActionInputs,
+  runUrl: string,
+): Promise<{
+  buildRowsResult: BuildRowsResult;
+  comment: UpsertCommentResult;
+}> {
+  const snapshot = await readManagedCommentSnapshot(
+    client,
+    inputs.commentMarker,
+  );
+  const writer = new ManagedCommentWriter({
+    client,
+    comment: snapshot.comment,
+    existingRows: snapshot.rows,
+    footer: inputs.footer,
+    header: inputs.header,
+    inputOrder: inputs.deployments.map((deployment) => buildRowKey(deployment)),
+    marker: inputs.commentMarker,
+  });
+
+  await writer.publishInitialRows(
+    buildInProgressRows(inputs.deployments, runUrl, new Date().toISOString()),
+  );
+
+  let buildRowsResult: BuildRowsResult | undefined;
+  let buildFailure: unknown;
+
+  try {
+    buildRowsResult = await buildDeployAndCommentRows(inputs, runUrl, writer);
+  } catch (error) {
+    buildFailure = error;
+  }
+
+  let comment: UpsertCommentResult;
+
+  try {
+    comment = await writer.flush();
+  } catch (error) {
+    if (buildFailure) {
+      throw combineErrors(
+        buildFailure,
+        error,
+        "failed to flush managed pull request comment updates",
+      );
+    }
+
+    throw error;
+  }
+
+  if (buildFailure) {
+    throw buildFailure;
+  }
+
+  if (!buildRowsResult) {
+    throw new Error("Managed deploy run did not produce comment rows.");
+  }
+
+  return {
+    buildRowsResult,
+    comment,
+  };
+}
+
+async function runCommentOnly(
+  client: GitHubClient,
+  inputs: CommentOnlyActionInputs,
+  runUrl: string,
+): Promise<{
+  buildRowsResult: BuildRowsResult;
+  comment: UpsertCommentResult;
+}> {
+  const buildRowsResult = await buildCommentOnlyRows(inputs, runUrl);
+  const comment = await writeManagedCommentRows(
+    client,
+    inputs,
+    buildRowsResult.nextRows,
+  );
+
+  return {
+    buildRowsResult,
+    comment,
+  };
 }
 
 async function buildDeployAndCommentRows(
   inputs: DeployAndCommentActionInputs,
   runUrl: string,
+  writer: ManagedCommentWriter,
 ): Promise<BuildRowsResult> {
   const deploymentResults = await mapWithConcurrencyLimit<
     DeployAndCommentActionInputs["deployments"][number],
-    ResolvedDeploymentResult
+    ResolvedDeploymentRowResult
   >(
     inputs.deployments,
     inputs.deploymentConcurrency,
@@ -279,6 +306,7 @@ async function buildDeployAndCommentRows(
         core.warning(sanitizeErrorMessage(error, inputs));
 
         if (!inputs.commentOnFailure) {
+          writer.restoreRow(deployment.projectId, deployment.environment);
           throw error;
         }
       }
@@ -286,18 +314,26 @@ async function buildDeployAndCommentRows(
       const { projectDetails, deploymentDetails } =
         await resolveDeploymentMetadata(inputs, deployment, deploymentUrl);
 
-      return {
+      const builtRowResult = buildDeploymentRowResult({
         deployment,
-        deploymentUrl,
         deploymentDetails,
-        projectDetails,
         deploymentFailed,
+        deploymentUrl,
+        actionStatus: inputs.status,
+        projectDetails,
+        runUrl,
+        updatedAtUtc: new Date().toISOString(),
+      });
+
+      writer.updateRow(builtRowResult.row);
+
+      return {
+        builtRowResult,
         deployFailure,
       };
     },
   );
 
-  const updatedAtUtc = new Date().toISOString();
   const nextRows: DeploymentCommentRow[] = [];
   const deploymentUrls: string[] = [];
   const statusKeys: string[] = [];
@@ -310,16 +346,7 @@ async function buildDeployAndCommentRows(
         deploymentUrls,
         statusKeys,
       },
-      buildDeploymentRowResult({
-        deployment: result.deployment,
-        deploymentUrl: result.deploymentUrl,
-        deploymentDetails: result.deploymentDetails,
-        projectDetails: result.projectDetails,
-        deploymentFailed: result.deploymentFailed,
-        actionStatus: inputs.status,
-        runUrl,
-        updatedAtUtc,
-      }),
+      result.builtRowResult,
     );
     deployFailure ??= result.deployFailure;
   }
@@ -550,33 +577,30 @@ function renderManagedCommentBody(
   });
 }
 
-async function rollbackPendingCommentUpdate(
-  client: GitHubClient,
-  rollbackState: PendingCommentRollbackState | undefined,
-  inputs: {
-    githubToken: string;
-    vercelToken?: string;
-  },
-): Promise<void> {
-  if (!rollbackState) {
-    return;
-  }
+function combineErrors(
+  primaryError: unknown,
+  secondaryError: unknown,
+  secondaryContext: string,
+): Error {
+  const normalizedPrimaryError = toError(primaryError);
+  const normalizedSecondaryError = toError(secondaryError);
+  const contextualizedSecondaryError = new Error(
+    `${secondaryContext}: ${normalizedSecondaryError.message}`,
+    {
+      cause: normalizedSecondaryError,
+    },
+  );
 
-  try {
-    if (rollbackState.previousComment) {
-      await client.updatePullRequestComment(
-        rollbackState.previousComment.id,
-        rollbackState.previousComment.body ?? "",
-      );
-      return;
-    }
-
-    await client.deletePullRequestComment(rollbackState.pendingCommentId);
-  } catch (error) {
-    core.warning(
-      `Failed to rollback pending pull request comment update: ${sanitizeErrorMessage(error, inputs)}`,
-    );
-  }
+  return new AggregateError(
+    [
+      normalizedPrimaryError,
+      contextualizedSecondaryError,
+    ],
+    `${normalizedPrimaryError.message}; ${secondaryContext}: ${normalizedSecondaryError.message}`,
+    {
+      cause: normalizedPrimaryError,
+    },
+  );
 }
 
 function isDirectRun(): boolean {

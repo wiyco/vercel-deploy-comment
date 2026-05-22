@@ -361,12 +361,14 @@ describe("parseActionInputs", () => {
             cwd: " apps/web ",
             orgId: " org_123 ",
             displayName: " web ",
+            status: " in_progress ",
             teamId: " team_123 ",
             slug: " my-team ",
           },
           {
             ...validCommentOnlyDeployment,
             displayName: " ",
+            status: " ",
             cwd: " ",
             orgId: "",
             teamId: null,
@@ -391,6 +393,7 @@ describe("parseActionInputs", () => {
       environment: "staging",
       projectId: "prj_web",
       projectUrl: "https://vercel.com/team/web",
+      status: "in_progress",
       teamId: "team_123",
       slug: "my-team",
     });
@@ -594,6 +597,19 @@ describe("parseActionInputs", () => {
         ]),
       },
       "deployments[0].displayName must be a string",
+    ],
+    [
+      "invalid comment-only deployment status",
+      {
+        mode: "comment-only",
+        deployments: JSON.stringify([
+          {
+            ...validCommentOnlyDeployment,
+            status: "pending",
+          },
+        ]),
+      },
+      "deployments[0].status must be one of",
     ],
     [
       "invalid modes",

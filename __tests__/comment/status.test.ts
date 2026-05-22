@@ -4,6 +4,51 @@ import { resolveDisplayStatus } from "../../src/comment/status";
 describe("resolveDisplayStatus", () => {
   it.each([
     [
+      "ready",
+      "ready",
+      "✅",
+      "Ready",
+    ],
+    [
+      "failed",
+      "failed",
+      "❌",
+      "Failed",
+    ],
+    [
+      "cancelled",
+      "cancelled",
+      "🚫",
+      "Cancelled",
+    ],
+    [
+      "skipped",
+      "skipped",
+      "⏭️",
+      "Skipped",
+    ],
+    [
+      "in_progress",
+      "in_progress",
+      "⏳",
+      "In Progress",
+    ],
+  ] as const)("prefers explicit deployment status %s", (deploymentStatus, key, emoji, label) => {
+    expect(
+      resolveDisplayStatus({
+        deploymentStatus,
+        vercelReadyState: "READY",
+        actionStatus: "failure",
+      }),
+    ).toEqual({
+      key,
+      emoji,
+      label,
+    });
+  });
+
+  it.each([
+    [
       "READY",
       "ready",
       "✅",
@@ -88,6 +133,31 @@ describe("resolveDisplayStatus", () => {
       resolveDisplayStatus({
         vercelReadyState: "ALIEN",
         actionStatus: "success",
+      }),
+    ).toEqual({
+      key: "unknown",
+      emoji: "❔",
+      label: "Unknown",
+    });
+  });
+
+  it("returns unknown for unrecognized explicit deployment statuses", () => {
+    expect(
+      resolveDisplayStatus({
+        deploymentStatus: "alien" as never,
+        actionStatus: "success",
+      }),
+    ).toEqual({
+      key: "unknown",
+      emoji: "❔",
+      label: "Unknown",
+    });
+  });
+
+  it("returns unknown for unrecognized action statuses", () => {
+    expect(
+      resolveDisplayStatus({
+        actionStatus: "alien" as never,
       }),
     ).toEqual({
       key: "unknown",

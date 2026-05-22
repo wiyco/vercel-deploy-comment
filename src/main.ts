@@ -354,6 +354,7 @@ async function buildCommentOnlyRows(
       buildDeploymentRowResult({
         deployment,
         deploymentUrl,
+        deploymentStatus: deployment.status,
         deploymentDetails,
         projectDetails,
         deploymentFailed: false,
@@ -421,6 +422,7 @@ async function resolveDeploymentMetadata(
 function buildDeploymentRowResult(options: {
   deployment: BaseDeploymentInput;
   deploymentUrl: string | undefined;
+  deploymentStatus?: CommentOnlyActionInputs["deployments"][number]["status"];
   deploymentDetails?: VercelDeploymentDetails;
   projectDetails?: VercelProjectDetails;
   deploymentFailed: boolean;
@@ -433,6 +435,7 @@ function buildDeploymentRowResult(options: {
     options.deploymentDetails,
   );
   const status = resolveDisplayStatus({
+    deploymentStatus: options.deploymentStatus,
     vercelReadyState: options.deploymentDetails?.readyState,
     actionStatus: options.deploymentFailed ? "failure" : options.actionStatus,
   });

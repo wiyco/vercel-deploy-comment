@@ -17989,6 +17989,8 @@ const HTTPS_PROTOCOL = "https:";
 const HTTP_PROTOCOL = "http:";
 const HTTPS_ONLY_PROTOCOLS = [HTTPS_PROTOCOL];
 const HTTP_AND_HTTPS_PROTOCOLS = [HTTPS_PROTOCOL, HTTP_PROTOCOL];
+const NO_PREVIEW = "N/A";
+const LEGACY_NO_PREVIEW = "Unavailable";
 const ROW_MARKER_PATTERN = /<!--\s*vercel-deploy-comment:row:[^\r\n]*?-->/;
 function buildCommentMarker(marker) {
 	return `<!-- vercel-deploy-comment:${marker} -->`;
@@ -18044,7 +18046,7 @@ function renderTableSeparator(includeEnvironment) {
 function renderRow(row, includeEnvironment) {
 	const project = `${buildRowMarker(row.projectId, row.environment)} ${markdownHttpsLink(row.projectName, row.projectUrl)}`;
 	const status = `${row.status.emoji} ${markdownLink(row.status.label, row.runUrl)}`;
-	const preview = row.previewUrl ? markdownHttpsLink("Preview", row.previewUrl) : "Unavailable";
+	const preview = shouldRenderPreviewLink(row) ? markdownHttpsLink("Preview", row.previewUrl) : NO_PREVIEW;
 	const updatedAt = formatUtcTimestamp(row.updatedAtUtc);
 	if (includeEnvironment) return `| ${project} | ${escapeTableCell(row.environment)} | ${status} | ${preview} | ${escapeTableCell(updatedAt)} |`;
 	return `| ${project} | ${status} | ${preview} | ${escapeTableCell(updatedAt)} |`;
@@ -18064,7 +18066,7 @@ function parseDeploymentCommentRow(line) {
 	const projectLink = parseMarkdownLink(projectCell.replace(rowMarker, "").trim(), HTTPS_ONLY_PROTOCOLS);
 	const statusDetails = parseStatusCell(statusCell);
 	if (!projectLink || !statusDetails) return;
-	const previewLink = previewCell === "Unavailable" ? void 0 : parseMarkdownLink(previewCell, HTTPS_ONLY_PROTOCOLS);
+	const previewLink = isNoPreviewCell(previewCell) ? void 0 : parseMarkdownLink(previewCell, HTTPS_ONLY_PROTOCOLS);
 	return {
 		environment: rowIdentity.environment,
 		projectId: rowIdentity.projectId,
@@ -18142,8 +18144,14 @@ function splitTableCells(line) {
 function hasCustomEnvironment(rows) {
 	return rows.some((row) => isCustomEnvironment(row.environment));
 }
+function shouldRenderPreviewLink(row) {
+	return row.status.key === "ready" && Boolean(row.previewUrl);
+}
 function isCustomEnvironment(environment) {
 	return !STANDARD_ENVIRONMENTS.has(environment.trim().toLowerCase());
+}
+function isNoPreviewCell(cell) {
+	return cell === NO_PREVIEW || cell === LEGACY_NO_PREVIEW;
 }
 function markdownLink(label, url) {
 	return markdownLinkWithProtocols(label, url, HTTP_AND_HTTPS_PROTOCOLS);

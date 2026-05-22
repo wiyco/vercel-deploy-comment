@@ -18019,7 +18019,7 @@ function parseDeploymentCommentRows(body) {
 	return rows;
 }
 function upsertDeploymentCommentRows(existingRows, nextRows, inputOrder) {
-	const orderedInputKeys = uniqueStrings(inputOrder);
+	const orderedInputKeys = uniqueStrings$1(inputOrder);
 	const inputKeySet = new Set(orderedInputKeys);
 	const nextByKey = new Map(nextRows.map((row) => [buildDeploymentRowKey(row.projectId, row.environment), row]));
 	const mergedRows = [];
@@ -18197,7 +18197,7 @@ function labelToStatusKey(label) {
 		default: return label.trim().toLowerCase().replace(/\s+/g, "_");
 	}
 }
-function uniqueStrings(values) {
+function uniqueStrings$1(values) {
 	const seen = /* @__PURE__ */ new Set();
 	const unique = [];
 	for (const value of values) if (!seen.has(value)) {
@@ -18341,6 +18341,9 @@ var GitHubClient = class {
 			action: "updated"
 		};
 	}
+	async getPullRequestComment(commentId) {
+		return this.request(`/repos/${this.#context.owner}/${this.#context.repo}/issues/comments/${commentId}`);
+	}
 	async deletePullRequestComment(commentId) {
 		await this.requestWithoutResponse(`/repos/${this.#context.owner}/${this.#context.repo}/issues/comments/${commentId}`, { method: "DELETE" });
 	}
@@ -18444,6 +18447,189 @@ function ensureTrailingSlash(value) {
 }
 function stripLeadingSlash(value) {
 	return value.replace(/^\/+/, "");
+}
+//#endregion
+//#region src/comment/writer.ts
+const DEFAULT_MIN_WRITE_INTERVAL_MS = 1e3;
+const DEFAULT_MAX_WRITE_ATTEMPTS = 3;
+const DEFAULT_RETRY_BASE_DELAY_MS = 1e3;
+const RETRYABLE_GITHUB_STATUS_CODES = new Set([
+	408,
+	409,
+	429,
+	500,
+	502,
+	503,
+	504
+]);
+var ManagedCommentWriter = class {
+	#client;
+	#existingRows;
+	#footer;
+	#header;
+	#inputOrder;
+	#marker;
+	#maxWriteAttempts;
+	#minWriteIntervalMs;
+	#now;
+	#retryBaseDelayMs;
+	#sleep;
+	#initialRowsByKey = /* @__PURE__ */ new Map();
+	#currentInputRowsByKey = /* @__PURE__ */ new Map();
+	#comment;
+	#currentRows;
+	#lastMutativeWriteAt;
+	#lastUpsertResult;
+	#writeQueue = Promise.resolve();
+	constructor(options) {
+		this.#client = options.client;
+		this.#comment = options.comment;
+		this.#existingRows = options.existingRows;
+		this.#footer = options.footer;
+		this.#header = options.header;
+		this.#inputOrder = uniqueStrings(options.inputOrder);
+		this.#marker = options.marker;
+		this.#maxWriteAttempts = options.maxWriteAttempts ?? DEFAULT_MAX_WRITE_ATTEMPTS;
+		this.#minWriteIntervalMs = options.minWriteIntervalMs ?? DEFAULT_MIN_WRITE_INTERVAL_MS;
+		this.#now = options.now ?? Date.now;
+		this.#retryBaseDelayMs = options.retryBaseDelayMs ?? DEFAULT_RETRY_BASE_DELAY_MS;
+		this.#sleep = options.sleep ?? sleep;
+		this.#currentRows = options.existingRows;
+		for (const row of options.existingRows) this.#initialRowsByKey.set(buildDeploymentRowKey(row.projectId, row.environment), row);
+	}
+	async publishInitialRows(rows) {
+		this.#replaceCurrentInputRows(rows);
+		this.#queueCurrentStateWrite();
+		return this.flush();
+	}
+	updateRow(row) {
+		this.#currentInputRowsByKey.set(buildDeploymentRowKey(row.projectId, row.environment), row);
+		this.#queueCurrentStateWrite();
+	}
+	restoreRow(projectId, environment) {
+		const key = buildDeploymentRowKey(projectId, environment);
+		const initialRow = this.#initialRowsByKey.get(key);
+		if (initialRow) this.#currentInputRowsByKey.set(key, initialRow);
+		else this.#currentInputRowsByKey.delete(key);
+		this.#queueCurrentStateWrite();
+	}
+	async flush() {
+		await this.#writeQueue;
+		if (!this.#lastUpsertResult) throw new Error("Managed comment writer has not published a comment yet.");
+		return this.#lastUpsertResult;
+	}
+	#replaceCurrentInputRows(rows) {
+		this.#currentInputRowsByKey.clear();
+		for (const row of rows) this.#currentInputRowsByKey.set(buildDeploymentRowKey(row.projectId, row.environment), row);
+	}
+	#queueCurrentStateWrite() {
+		this.#currentRows = this.#renderCurrentRows();
+		const body = renderDeploymentComment({
+			footer: this.#footer,
+			header: this.#header,
+			marker: this.#marker,
+			rows: this.#currentRows
+		});
+		this.#writeQueue = this.#writeQueue.then(() => this.#writeBody(body));
+		this.#writeQueue.catch(() => {});
+	}
+	#renderCurrentRows() {
+		return upsertDeploymentCommentRows(this.#existingRows, this.#getCurrentInputRows(), this.#inputOrder);
+	}
+	#getCurrentInputRows() {
+		const rows = [];
+		for (const key of this.#inputOrder) {
+			const row = this.#currentInputRowsByKey.get(key);
+			if (row) rows.push(row);
+		}
+		return rows;
+	}
+	async #writeBody(body) {
+		const result = await this.#writeBodyWithRetry(body);
+		this.#comment = {
+			...this.#comment ?? {},
+			body,
+			html_url: result.htmlUrl,
+			id: result.id
+		};
+		this.#lastUpsertResult = result;
+	}
+	async #writeBodyWithRetry(body) {
+		for (let attempt = 1; attempt <= this.#maxWriteAttempts; attempt += 1) {
+			await this.#waitForMutativeWriteSlot();
+			try {
+				return this.#comment ? await this.#client.updatePullRequestComment(this.#comment.id, body) : await this.#client.createPullRequestComment(body);
+			} catch (error) {
+				const recoveredResult = await this.#recoverWrite(body);
+				if (recoveredResult) return recoveredResult;
+				if (attempt >= this.#maxWriteAttempts || !isRetryableGitHubWriteError(error)) throw error;
+				await this.#sleep(this.#retryDelayForAttempt(attempt));
+			}
+		}
+		throw new Error("Managed comment writer exhausted all write attempts.");
+	}
+	async #recoverWrite(body) {
+		if (this.#comment) return this.#recoverUpdatedComment(body, this.#comment.id);
+		return this.#recoverCreatedComment(body);
+	}
+	async #recoverUpdatedComment(body, commentId) {
+		try {
+			const refreshedComment = await this.#client.getPullRequestComment(commentId);
+			if ((refreshedComment.body ?? "") !== body) return;
+			this.#comment = {
+				...refreshedComment,
+				body
+			};
+			return {
+				action: "updated",
+				htmlUrl: refreshedComment.html_url,
+				id: refreshedComment.id
+			};
+		} catch {
+			return;
+		}
+	}
+	async #recoverCreatedComment(body) {
+		try {
+			const existingComment = await this.#client.findExistingActionComment(buildCommentMarker(this.#marker));
+			if (!existingComment || (existingComment.body ?? "") !== body) return;
+			this.#comment = {
+				...existingComment,
+				body
+			};
+			return {
+				action: "created",
+				htmlUrl: existingComment.html_url,
+				id: existingComment.id
+			};
+		} catch {
+			return;
+		}
+	}
+	async #waitForMutativeWriteSlot() {
+		if (this.#lastMutativeWriteAt === void 0) {
+			this.#lastMutativeWriteAt = this.#now();
+			return;
+		}
+		const elapsed = this.#now() - this.#lastMutativeWriteAt;
+		if (elapsed < this.#minWriteIntervalMs) await this.#sleep(this.#minWriteIntervalMs - elapsed);
+		this.#lastMutativeWriteAt = this.#now();
+	}
+	#retryDelayForAttempt(attempt) {
+		return this.#retryBaseDelayMs * 2 ** (attempt - 1);
+	}
+};
+function isRetryableGitHubWriteError(error) {
+	if (!(error instanceof GitHubApiError)) return true;
+	return Boolean(error.status && RETRYABLE_GITHUB_STATUS_CODES.has(error.status));
+}
+function uniqueStrings(values) {
+	return Array.from(new Set(values));
+}
+function sleep(milliseconds) {
+	return new Promise((resolve) => {
+		setTimeout(resolve, milliseconds);
+	});
 }
 //#endregion
 //#region src/shared/concurrency.ts
@@ -18635,28 +18821,7 @@ async function run() {
 		const context = readGitHubRuntimeContext();
 		const runUrl = buildRunUrl(context);
 		const client = new GitHubClient(inputs.githubToken, context);
-		let pendingCommentRollbackState;
-		if (inputs.mode === "deploy-and-comment") {
-			const existingCommentSnapshot = await readManagedCommentSnapshot(client, inputs.commentMarker);
-			pendingCommentRollbackState = {
-				pendingCommentId: (await writeManagedCommentRows(client, inputs, buildInProgressRows(inputs.deployments, runUrl, (/* @__PURE__ */ new Date()).toISOString()), existingCommentSnapshot)).id,
-				previousComment: existingCommentSnapshot.comment
-			};
-		}
-		let buildRowsResult;
-		try {
-			buildRowsResult = inputs.mode === "deploy-and-comment" ? await buildDeployAndCommentRows(inputs, runUrl) : await buildCommentOnlyRows(inputs, runUrl);
-		} catch (error) {
-			await rollbackPendingCommentUpdate(client, pendingCommentRollbackState, inputs);
-			throw error;
-		}
-		let comment;
-		try {
-			comment = await writeManagedCommentRows(client, inputs, buildRowsResult.nextRows);
-		} catch (error) {
-			await rollbackPendingCommentUpdate(client, pendingCommentRollbackState, inputs);
-			throw error;
-		}
+		const { buildRowsResult, comment } = inputs.mode === "deploy-and-comment" ? await runDeployAndComment(client, inputs, runUrl) : await runCommentOnly(client, inputs, runUrl);
 		setOutput("comment-id", String(comment.id));
 		setOutput("comment-url", comment.htmlUrl);
 		setOutput("deployment-urls", JSON.stringify(buildRowsResult.deploymentUrls));
@@ -18703,7 +18868,47 @@ function sanitizeErrorMessage(error, inputs) {
 function toError(error) {
 	return error instanceof Error ? error : new Error(String(error));
 }
-async function buildDeployAndCommentRows(inputs, runUrl) {
+async function runDeployAndComment(client, inputs, runUrl) {
+	const snapshot = await readManagedCommentSnapshot(client, inputs.commentMarker);
+	const writer = new ManagedCommentWriter({
+		client,
+		comment: snapshot.comment,
+		existingRows: snapshot.rows,
+		footer: inputs.footer,
+		header: inputs.header,
+		inputOrder: inputs.deployments.map((deployment) => buildRowKey(deployment)),
+		marker: inputs.commentMarker
+	});
+	await writer.publishInitialRows(buildInProgressRows(inputs.deployments, runUrl, (/* @__PURE__ */ new Date()).toISOString()));
+	let buildRowsResult;
+	let buildFailure;
+	try {
+		buildRowsResult = await buildDeployAndCommentRows(inputs, runUrl, writer);
+	} catch (error) {
+		buildFailure = error;
+	}
+	let comment;
+	try {
+		comment = await writer.flush();
+	} catch (error) {
+		if (buildFailure) throw combineErrors(buildFailure, error, "failed to flush managed pull request comment updates");
+		throw error;
+	}
+	if (buildFailure) throw buildFailure;
+	if (!buildRowsResult) throw new Error("Managed deploy run did not produce comment rows.");
+	return {
+		buildRowsResult,
+		comment
+	};
+}
+async function runCommentOnly(client, inputs, runUrl) {
+	const buildRowsResult = await buildCommentOnlyRows(inputs, runUrl);
+	return {
+		buildRowsResult,
+		comment: await writeManagedCommentRows(client, inputs, buildRowsResult.nextRows)
+	};
+}
+async function buildDeployAndCommentRows(inputs, runUrl, writer) {
 	const deploymentResults = await mapWithConcurrencyLimit(inputs.deployments, inputs.deploymentConcurrency, async (deployment, index) => {
 		if (deployment === void 0) throw new Error(`deployments[${index}] is missing.`);
 		let deploymentUrl = deployment.deploymentUrl;
@@ -18720,19 +18925,28 @@ async function buildDeployAndCommentRows(inputs, runUrl) {
 			deployFailure = toError(error);
 			deploymentUrl = getDeploymentUrlFromError(error) ?? deploymentUrl;
 			warning(sanitizeErrorMessage(error, inputs));
-			if (!inputs.commentOnFailure) throw error;
+			if (!inputs.commentOnFailure) {
+				writer.restoreRow(deployment.projectId, deployment.environment);
+				throw error;
+			}
 		}
 		const { projectDetails, deploymentDetails } = await resolveDeploymentMetadata(inputs, deployment, deploymentUrl);
-		return {
+		const builtRowResult = buildDeploymentRowResult({
 			deployment,
-			deploymentUrl,
 			deploymentDetails,
-			projectDetails,
 			deploymentFailed,
+			deploymentUrl,
+			actionStatus: inputs.status,
+			projectDetails,
+			runUrl,
+			updatedAtUtc: (/* @__PURE__ */ new Date()).toISOString()
+		});
+		writer.updateRow(builtRowResult.row);
+		return {
+			builtRowResult,
 			deployFailure
 		};
 	});
-	const updatedAtUtc = (/* @__PURE__ */ new Date()).toISOString();
 	const nextRows = [];
 	const deploymentUrls = [];
 	const statusKeys = [];
@@ -18742,16 +18956,7 @@ async function buildDeployAndCommentRows(inputs, runUrl) {
 			nextRows,
 			deploymentUrls,
 			statusKeys
-		}, buildDeploymentRowResult({
-			deployment: result.deployment,
-			deploymentUrl: result.deploymentUrl,
-			deploymentDetails: result.deploymentDetails,
-			projectDetails: result.projectDetails,
-			deploymentFailed: result.deploymentFailed,
-			actionStatus: inputs.status,
-			runUrl,
-			updatedAtUtc
-		}));
+		}, result.builtRowResult);
 		deployFailure ??= result.deployFailure;
 	}
 	return {
@@ -18873,17 +19078,11 @@ function renderManagedCommentBody(inputs, existingRows, nextRows) {
 		rows
 	});
 }
-async function rollbackPendingCommentUpdate(client, rollbackState, inputs) {
-	if (!rollbackState) return;
-	try {
-		if (rollbackState.previousComment) {
-			await client.updatePullRequestComment(rollbackState.previousComment.id, rollbackState.previousComment.body ?? "");
-			return;
-		}
-		await client.deletePullRequestComment(rollbackState.pendingCommentId);
-	} catch (error) {
-		warning(`Failed to rollback pending pull request comment update: ${sanitizeErrorMessage(error, inputs)}`);
-	}
+function combineErrors(primaryError, secondaryError, secondaryContext) {
+	const normalizedPrimaryError = toError(primaryError);
+	const normalizedSecondaryError = toError(secondaryError);
+	const contextualizedSecondaryError = new Error(`${secondaryContext}: ${normalizedSecondaryError.message}`, { cause: normalizedSecondaryError });
+	return new AggregateError([normalizedPrimaryError, contextualizedSecondaryError], `${normalizedPrimaryError.message}; ${secondaryContext}: ${normalizedSecondaryError.message}`, { cause: normalizedPrimaryError });
 }
 function isDirectRun() {
 	return Boolean(process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href);

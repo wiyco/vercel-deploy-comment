@@ -103,6 +103,8 @@ vercel deploy --prebuilt
 > `deploy-and-comment` entries in one action invocation run in parallel up to `deployment-concurrency` at a time. Before the deploys start, the action performs one managed comment create-or-update with `In Progress` rows for the current input. After every row is ready, it updates that same managed comment with the combined final row set.
 >
 > This design makes same-`cwd`, multi-project and multi-environment deployments safe because local `.vercel` state is not shared between rows.
+>
+> `vercel build --yes` executes inside the workflow runner's temp workspace, not on Vercel's remote build machine. Build success therefore depends on runner CPU and memory capacity together with `deployment-concurrency` and the project build size. On undersized runners, multiple parallel builds can terminate with `SIGKILL` or a generic failed job without a definitive OOM signal.
 
 ### Metadata Resolution
 
@@ -248,10 +250,10 @@ For the default GitHub token:
 ```yaml
 permissions:
   contents: read
-  issues: write
+  issues: write # or pull-requests: write
 ```
 
-`issues: write` is required because pull request conversation comments are written through GitHub's Issue comments REST API. See [External API Usage](#external-api-usage) for the exact endpoints. `pull-requests: write` is also acceptable.
+`issues: write` or `pull-requests: write` is required because pull request conversation comments are written through GitHub's Issue comments REST API, and that API accepts either permission set. See [External API Usage](#external-api-usage) for the exact endpoints.
 
 ## Acceptance Criteria
 

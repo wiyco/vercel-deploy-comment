@@ -4,7 +4,7 @@ This action deploys one or more Vercel projects, or accepts existing deployment 
 
 ## Public API
 
-### Top-level Inputs
+### Inputs
 
 | Input | Required | Default | Description |
 | :--- | :--- | :--- | :--- |
@@ -19,6 +19,37 @@ This action deploys one or more Vercel projects, or accepts existing deployment 
 | `status` | No | `success` | Fallback GitHub Actions status when `deployments[].status` is unset and Vercel deployment details are unavailable. |
 | `comment-on-failure` | No | `true` | Whether deploy failures still upsert the affected rows before the action fails. |
 
+#### `deploy-and-comment` Entries
+
+| Field | Required | Description |
+| :--- | :--- | :--- |
+| `cwd` | Yes | `string`. Working directory to copy into an isolated temporary workspace before running the Vercel CLI. |
+| `projectId` | Yes | `string`. Vercel project identifier. |
+| `orgId` | Yes | `string`. Vercel organization identifier written to `.vercel/project.json`. |
+| `environment` | Yes | `string`. Vercel environment passed to `vercel pull --environment`. |
+| `projectUrl` | Yes | Absolute `https://` URL for the Vercel project page shown in the comment. |
+| `deploymentUrl` | No | Absolute `https://` URL for an existing deployment to enrich or render instead of relying only on CLI output. |
+| `displayName` | No | `string`. Preferred project name used before API-derived names. |
+| `teamId` | No | `string`. Optional Vercel team identifier appended to REST API requests. |
+| `slug` | No | `string`. Optional Vercel team slug appended to REST API requests. |
+| `command` | Removed | No longer accepted. The action owns the full `pull -> build -> deploy` lifecycle. |
+| `projectName` | Removed | No longer accepted. Display name is resolved from `displayName`, Vercel metadata, or `projectId`. |
+
+The action owns the full `pull -> build -> deploy` lifecycle. Prebuilt output is no longer expected as an external prerequisite.
+
+#### `comment-only` Entries
+
+| Field | Required | Description |
+| :--- | :--- | :--- |
+| `projectId` | Yes | `string`. Vercel project identifier. |
+| `environment` | Yes | `string`. Environment label rendered in the comment and used in row identity. |
+| `projectUrl` | Yes | Absolute `https://` URL for the Vercel project page shown in the comment. |
+| `deploymentUrl` | Yes | Absolute `https://` URL for the existing deployment shown in the comment. |
+| `status` | No | One of `ready`, `failed`, `cancelled`, `skipped`, or `in_progress`. When unset, the action falls back to Vercel deployment details or the top-level `status` input. |
+| `displayName` | No | `string`. Preferred project name used before API-derived names. |
+| `teamId` | No | `string`. Optional Vercel team identifier appended to REST API requests. |
+| `slug` | No | `string`. Optional Vercel team slug appended to REST API requests. |
+
 ### Outputs
 
 | Output | Description |
@@ -27,46 +58,6 @@ This action deploys one or more Vercel projects, or accepts existing deployment 
 | `comment-url` | URL of the created or updated pull request comment. |
 | `deployment-urls` | JSON array of preview deployment URLs produced for the current `deployments` input, in input order with rows that resolved a preview URL. This output does not include preserved rows from an existing managed comment. |
 | `statuses` | JSON array of normalized status keys produced for the current `deployments` input, in input order. Current values are `ready`, `failed`, `cancelled`, `skipped`, `in_progress`, and `unknown`. This output does not include preserved rows from an existing managed comment. |
-
-### `deploy-and-comment` Entries
-
-Required fields:
-
-- `cwd: string`
-- `projectId: string`
-- `orgId: string`
-- `environment: string`
-- `projectUrl: string` as an absolute `https://` URL
-
-Optional fields:
-
-- `deploymentUrl: string` as an absolute `https://` URL
-- `displayName: string`
-- `teamId: string`
-- `slug: string`
-
-Removed fields:
-
-- `command`
-- `projectName`
-
-The action owns the full `pull -> build -> deploy` lifecycle. Prebuilt output is no longer expected as an external prerequisite.
-
-### `comment-only` Entries
-
-Required fields:
-
-- `projectId: string`
-- `environment: string`
-- `projectUrl: string` as an absolute `https://` URL
-- `deploymentUrl: string` as an absolute `https://` URL
-
-Optional fields:
-
-- `status: "ready" | "failed" | "cancelled" | "skipped" | "in_progress"`
-- `displayName: string`
-- `teamId: string`
-- `slug: string`
 
 ## Runtime Design
 

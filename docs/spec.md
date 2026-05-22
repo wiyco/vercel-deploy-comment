@@ -108,6 +108,7 @@ Project display names are resolved in this order:
 5. `projectId`
 
 Preview URLs are resolved from the deployment URL, with Vercel deployment details used to enrich the rendered row when available.
+The `Preview` cell renders `[Preview](...)` only when the row status is `ready` and a preview URL exists. All other rows render `N/A`.
 
 Deployment statuses are resolved in this order:
 

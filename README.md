@@ -14,6 +14,7 @@ The rendered comment looks like this:
 
 The `Environment` column is shown only when at least one row uses a custom environment outside `preview`, `production`, or `development`.
 Status cells render an emoji plus the linked status label, for example `✅ [Ready](https://github.com/my-org/my-repo/actions/runs/1234567890)`.
+The `Preview` cell displays a link only when a deployment is `Ready` and has a preview URL. Otherwise, it shows `N/A`.
 
 This action is project-driven.
 

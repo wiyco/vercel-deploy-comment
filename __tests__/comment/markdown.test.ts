@@ -131,7 +131,7 @@ describe("renderDeploymentComment", () => {
       "[web \\| app \\[main\\]](https://vercel.com/team/web)",
     );
     expect(markdown).toContain("| staging \\| blue |");
-    expect(markdown).toContain("| Unavailable |");
+    expect(markdown).toContain("| N/A |");
   });
 
   it("keeps invalid timestamps unchanged", () => {
@@ -330,7 +330,7 @@ describe("parseDeploymentCommentRows", () => {
         projectId: "prj_web",
         projectName: "web",
         projectUrl: "https://vercel.com/team/web",
-        previewUrl: "https://web-git-feature-team.vercel.app/",
+        previewUrl: undefined,
         runUrl: "https://github.com/acme/repo/actions/runs/123",
         status: {
           key: "in_progress",
@@ -428,12 +428,12 @@ describe("parseDeploymentCommentRows", () => {
     ).toEqual([
       {
         projectId: "prj_failed",
-        previewUrl: "https://failed.vercel.app/",
+        previewUrl: undefined,
         statusKey: "failed",
       },
       {
         projectId: "prj_cancelled",
-        previewUrl: "https://cancelled.vercel.app/",
+        previewUrl: undefined,
         statusKey: "cancelled",
       },
       {
@@ -443,13 +443,34 @@ describe("parseDeploymentCommentRows", () => {
       },
       {
         projectId: "prj_unknown",
-        previewUrl: "https://unknown.vercel.app/",
+        previewUrl: undefined,
         statusKey: "unknown",
       },
       {
         projectId: "prj_custom",
-        previewUrl: "https://custom.vercel.app/",
+        previewUrl: undefined,
         statusKey: "pending_review",
+      },
+    ]);
+  });
+
+  it("parses legacy Unavailable previews as missing", () => {
+    const body = `| ${buildRowMarker("prj_web", "preview")} [web](https://vercel.com/team/web) | X [Failed](https://github.com/acme/repo/actions/runs/2) | Unavailable | later |`;
+
+    expect(parseDeploymentCommentRows(body)).toEqual([
+      {
+        environment: "preview",
+        projectId: "prj_web",
+        projectName: "web",
+        projectUrl: "https://vercel.com/team/web",
+        previewUrl: undefined,
+        runUrl: "https://github.com/acme/repo/actions/runs/2",
+        status: {
+          key: "failed",
+          emoji: "X",
+          label: "Failed",
+        },
+        updatedAtUtc: "later",
       },
     ]);
   });

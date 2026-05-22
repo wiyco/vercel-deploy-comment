@@ -15,6 +15,8 @@ const HTTP_AND_HTTPS_PROTOCOLS = [
   HTTPS_PROTOCOL,
   HTTP_PROTOCOL,
 ] as const;
+const NO_PREVIEW = "N/A";
+const LEGACY_NO_PREVIEW = "Unavailable";
 
 const ROW_MARKER_PATTERN = /<!--\s*vercel-deploy-comment:row:[^\r\n]*?-->/;
 
@@ -129,9 +131,9 @@ function renderRow(
     row.projectUrl,
   )}`;
   const status = `${row.status.emoji} ${markdownLink(row.status.label, row.runUrl)}`;
-  const preview = row.previewUrl
+  const preview = shouldRenderPreviewLink(row)
     ? markdownHttpsLink("Preview", row.previewUrl)
-    : "Unavailable";
+    : NO_PREVIEW;
   const updatedAt = formatUtcTimestamp(row.updatedAtUtc);
 
   if (includeEnvironment) {
@@ -181,10 +183,9 @@ function parseDeploymentCommentRow(
     return undefined;
   }
 
-  const previewLink =
-    previewCell === "Unavailable"
-      ? undefined
-      : parseMarkdownLink(previewCell, HTTPS_ONLY_PROTOCOLS);
+  const previewLink = isNoPreviewCell(previewCell)
+    ? undefined
+    : parseMarkdownLink(previewCell, HTTPS_ONLY_PROTOCOLS);
 
   return {
     environment: rowIdentity.environment,
@@ -325,8 +326,20 @@ function hasCustomEnvironment(rows: DeploymentCommentRow[]): boolean {
   return rows.some((row) => isCustomEnvironment(row.environment));
 }
 
+function shouldRenderPreviewLink(
+  row: DeploymentCommentRow,
+): row is DeploymentCommentRow & {
+  previewUrl: string;
+} {
+  return row.status.key === "ready" && Boolean(row.previewUrl);
+}
+
 function isCustomEnvironment(environment: string): boolean {
   return !STANDARD_ENVIRONMENTS.has(environment.trim().toLowerCase());
+}
+
+function isNoPreviewCell(cell: string): boolean {
+  return cell === NO_PREVIEW || cell === LEGACY_NO_PREVIEW;
 }
 
 function markdownLink(label: string, url: string): string {

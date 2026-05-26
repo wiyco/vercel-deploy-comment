@@ -20,23 +20,26 @@ jobs:
         with:
           ref: ${{ github.sha }}
           fetch-depth: 0
+          persist-credentials: false
       - name: Validate release tag and ancestry
         id: validate
         shell: bash
         run: |
           set -euo pipefail
 
-          if [[ ! "$RELEASE_TAG" =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+          if [[ ! "$RELEASE_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
             echo "Stable action releases must use semver tags like v1.2.3. Got: $RELEASE_TAG"
             exit 1
           fi
+
+          RELEASE_MAJOR="${BASH_REMATCH[1]}"
 
           if [[ -z "$DEFAULT_BRANCH" ]]; then
             echo "Repository default branch is unavailable."
             exit 1
           fi
 
-          MAJOR_TAG="v${BASH_REMATCH[1]}"
+          MAJOR_TAG="v$RELEASE_MAJOR"
           echo "major-tag=$MAJOR_TAG" >> "$GITHUB_OUTPUT"
 
           if ! RELEASE_TAG_SHA="$(git rev-parse --verify "refs/tags/$RELEASE_TAG^{commit}" 2>/dev/null)"; then
@@ -60,9 +63,36 @@ jobs:
             echo "Release tag $RELEASE_TAG ($RELEASE_TAG_SHA) is not reachable from $DEFAULT_BRANCH."
             exit 1
           fi
+
+          LATEST_STABLE_TAG=""
+          LATEST_MINOR=-1
+          LATEST_PATCH=-1
+
+          while IFS= read -r candidate_tag; do
+            if [[ "$candidate_tag" =~ ^v${RELEASE_MAJOR}\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+              candidate_minor="${BASH_REMATCH[1]}"
+              candidate_patch="${BASH_REMATCH[2]}"
+              if (( candidate_minor > LATEST_MINOR || (candidate_minor == LATEST_MINOR && candidate_patch > LATEST_PATCH) )); then
+                LATEST_STABLE_TAG="$candidate_tag"
+                LATEST_MINOR="$candidate_minor"
+                LATEST_PATCH="$candidate_patch"
+              fi
+            fi
+          done < <(git tag --merged "refs/remotes/origin/$DEFAULT_BRANCH" --list "${MAJOR_TAG}.*")
+
+          if [[ -z "$LATEST_STABLE_TAG" ]]; then
+            echo "No stable release tags were found for $MAJOR_TAG."
+            exit 1
+          fi
+
+          if [[ "$LATEST_STABLE_TAG" != "$RELEASE_TAG" ]]; then
+            echo "Refusing to move $MAJOR_TAG to $RELEASE_TAG because newer stable release $LATEST_STABLE_TAG already exists."
+            exit 1
+          fi
       - name: Update major tag
         shell: bash
         env:
+          GITHUB_TOKEN: ${{ github.token }}
           MAJOR_TAG: ${{ steps.validate.outputs.major-tag }}
           RELEASE_SHA: ${{ steps.validate.outputs.release-sha }}
         run: |
@@ -70,6 +100,22 @@ jobs:
 
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          ASKPASS_SCRIPT="$RUNNER_TEMP/git-askpass.sh"
+          trap 'rm -f "$ASKPASS_SCRIPT"' EXIT
+
+          cat >"$ASKPASS_SCRIPT" <<'EOF'
+          #!/usr/bin/env sh
+          case "$1" in
+            Username*) printf '%s\n' 'x-access-token' ;;
+            Password*) printf '%s\n' "$GITHUB_TOKEN" ;;
+            *) exit 1 ;;
+          esac
+          EOF
+
+          chmod 700 "$ASKPASS_SCRIPT"
+          export GIT_ASKPASS="$ASKPASS_SCRIPT"
+          export GIT_TERMINAL_PROMPT=0
 
           git tag --force "$MAJOR_TAG" "$RELEASE_SHA"
           git push --force origin "refs/tags/$MAJOR_TAG"

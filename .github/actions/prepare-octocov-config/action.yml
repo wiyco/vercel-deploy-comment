@@ -1,0 +1,20 @@
+name: "Prepare octocov config"
+description: "Copy .octocov.yml to a temporary workspace file and inject a coverage report link."
+inputs:
+  coverage-artifact-url:
+    description: "Coverage report artifact URL from actions/upload-artifact."
+    required: false
+    default: ""
+outputs:
+  config-path:
+    description: "Path to the prepared octocov config file."
+    value: ${{ steps.prepare.outputs.config-path }}
+runs:
+  using: composite
+  steps:
+    - id: prepare
+      shell: bash
+      env:
+        COVERAGE_ARTIFACT_URL: ${{ inputs.coverage-artifact-url }}
+        GITHUB_ACTION_PATH: ${{ github.action_path }}
+      run: node "$GITHUB_ACTION_PATH/prepare-octocov-config.mjs"

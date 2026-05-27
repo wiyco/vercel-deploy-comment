@@ -18906,7 +18906,7 @@ async function runDeployAndComment(client, inputs, runUrl) {
 		marker: inputs.commentMarker
 	});
 	await writer.publishInitialRows(buildInProgressRows(deployments, runUrl, (/* @__PURE__ */ new Date()).toISOString()));
-	const buildRowsResultResult = await buildDeployAndCommentRows(inputs, deployments, runUrl, writer).then((value) => ({
+	const buildRowsOutcome = await buildDeployAndCommentRows(inputs, deployments, runUrl, writer).then((value) => ({
 		ok: true,
 		value
 	})).catch((error) => ({
@@ -18917,12 +18917,12 @@ async function runDeployAndComment(client, inputs, runUrl) {
 	try {
 		comment = await writer.flush();
 	} catch (error) {
-		if (!buildRowsResultResult.ok) throw combineErrors(buildRowsResultResult.error, error, "failed to flush managed pull request comment updates");
+		if (!buildRowsOutcome.ok) throw combineErrors(buildRowsOutcome.error, error, "failed to flush managed pull request comment updates");
 		throw error;
 	}
-	if (!buildRowsResultResult.ok) throw buildRowsResultResult.error;
+	if (!buildRowsOutcome.ok) throw buildRowsOutcome.error;
 	return {
-		buildRowsResult: buildRowsResultResult.value,
+		buildRowsResult: buildRowsOutcome.value,
 		comment
 	};
 }

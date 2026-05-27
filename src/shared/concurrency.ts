@@ -1,4 +1,9 @@
 export async function mapWithConcurrencyLimit<TItem, TResult>(
+  items: readonly TItem[],
+  concurrency: number,
+  mapItem: (item: TItem, index: number) => Promise<TResult>,
+): Promise<TResult[]>;
+export async function mapWithConcurrencyLimit<TItem, TResult>(
   items: readonly (TItem | undefined)[],
   concurrency: number,
   mapItem: (item: TItem | undefined, index: number) => Promise<TResult>,

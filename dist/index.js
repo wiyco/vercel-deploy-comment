@@ -18883,11 +18883,18 @@ async function resolveOptionalMetadata(resolveValue, inputs) {
 function buildRowKey(deployment) {
 	return buildDeploymentRowKey(deployment.projectId, deployment.environment);
 }
+function requireDefinedItems(items, label) {
+	return items.map((item, index) => {
+		if (item === void 0) throw new Error(`${label} at index ${index} is undefined.`);
+		return item;
+	});
+}
 function getPreviewUrl(deploymentUrl, deploymentDetails) {
 	const rawUrl = deploymentDetails?.url ?? deploymentUrl;
 	return rawUrl ? toHttpUrl(rawUrl) : void 0;
 }
 async function runDeployAndComment(client, inputs, runUrl) {
+	const deployments = requireDefinedItems(inputs.deployments, "Deployment");
 	const snapshot = await readManagedCommentSnapshot(client, inputs.commentMarker);
 	const writer = new ManagedCommentWriter({
 		client,
@@ -18895,11 +18902,11 @@ async function runDeployAndComment(client, inputs, runUrl) {
 		existingRows: snapshot.rows,
 		footer: inputs.footer,
 		header: inputs.header,
-		inputOrder: inputs.deployments.map((deployment) => buildRowKey(deployment)),
+		inputOrder: deployments.map((deployment) => buildRowKey(deployment)),
 		marker: inputs.commentMarker
 	});
-	await writer.publishInitialRows(buildInProgressRows(inputs.deployments, runUrl, (/* @__PURE__ */ new Date()).toISOString()));
-	const buildRowsResultResult = await buildDeployAndCommentRows(inputs, runUrl, writer).then((value) => ({
+	await writer.publishInitialRows(buildInProgressRows(deployments, runUrl, (/* @__PURE__ */ new Date()).toISOString()));
+	const buildRowsResultResult = await buildDeployAndCommentRows(inputs, deployments, runUrl, writer).then((value) => ({
 		ok: true,
 		value
 	})).catch((error) => ({
@@ -18920,21 +18927,20 @@ async function runDeployAndComment(client, inputs, runUrl) {
 	};
 }
 async function runCommentOnly(client, inputs, runUrl) {
-	const buildRowsResult = await buildCommentOnlyRows(inputs, runUrl);
+	const buildRowsResult = await buildCommentOnlyRows(inputs, requireDefinedItems(inputs.deployments, "Deployment"), runUrl);
 	return {
 		buildRowsResult,
 		comment: await writeManagedCommentRows(client, inputs, buildRowsResult.nextRows)
 	};
 }
-async function buildDeployAndCommentRows(inputs, runUrl, writer) {
-	const deploymentResults = await mapWithConcurrencyLimit(inputs.deployments, inputs.deploymentConcurrency, async (deployment, _index) => {
-		const resolvedDeployment = deployment;
-		let deploymentUrl = resolvedDeployment.deploymentUrl;
+async function buildDeployAndCommentRows(inputs, deployments, runUrl, writer) {
+	const deploymentResults = await mapWithConcurrencyLimit(deployments, inputs.deploymentConcurrency, async (deployment) => {
+		let deploymentUrl = deployment.deploymentUrl;
 		let deploymentFailed = false;
 		let deployFailure;
 		try {
 			deploymentUrl = await runVercelDeploy({
-				deployment: resolvedDeployment,
+				deployment,
 				token: inputs.vercelToken,
 				exec
 			});
@@ -18944,13 +18950,13 @@ async function buildDeployAndCommentRows(inputs, runUrl, writer) {
 			deploymentUrl = getDeploymentUrlFromError(error) ?? deploymentUrl;
 			warning(sanitizeErrorMessage(error, inputs));
 			if (!inputs.commentOnFailure) {
-				writer.restoreRow(resolvedDeployment.projectId, resolvedDeployment.environment);
+				writer.restoreRow(deployment.projectId, deployment.environment);
 				throw error;
 			}
 		}
-		const { projectDetails, deploymentDetails } = await resolveDeploymentMetadata(inputs, resolvedDeployment, deploymentUrl);
+		const { projectDetails, deploymentDetails } = await resolveDeploymentMetadata(inputs, deployment, deploymentUrl);
 		const builtRowResult = buildDeploymentRowResult({
-			deployment: resolvedDeployment,
+			deployment,
 			deploymentDetails,
 			deploymentFailed,
 			deploymentUrl,
@@ -18984,12 +18990,12 @@ async function buildDeployAndCommentRows(inputs, runUrl, writer) {
 		deployFailure
 	};
 }
-async function buildCommentOnlyRows(inputs, runUrl) {
+async function buildCommentOnlyRows(inputs, deployments, runUrl) {
 	const updatedAtUtc = (/* @__PURE__ */ new Date()).toISOString();
 	const nextRows = [];
 	const deploymentUrls = [];
 	const statusKeys = [];
-	for (const deployment of inputs.deployments) {
+	for (const deployment of deployments) {
 		const deploymentUrl = deployment.deploymentUrl;
 		const { projectDetails, deploymentDetails } = await resolveDeploymentMetadata(inputs, deployment, deploymentUrl);
 		appendBuiltDeploymentRowResult({

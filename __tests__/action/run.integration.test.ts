@@ -179,6 +179,32 @@ describe("runActionMain", () => {
     expect(setOutput).not.toHaveBeenCalled();
   });
 
+  it("rejects undefined deployment entries with a descriptive index error", async () => {
+    readActionInputs.mockReturnValue({
+      githubToken: "ghs_token",
+      vercelToken: "vercel_token",
+      mode: "deploy-and-comment",
+      deploymentConcurrency: 2,
+      deployments: [
+        undefined,
+      ],
+      header: "Preview",
+      footer: undefined,
+      commentMarker: "default",
+      status: "success",
+      commentOnFailure: false,
+    });
+
+    const { runActionMain } = await import("../../src/action/run");
+
+    await expect(runActionMain()).rejects.toThrow(
+      "Deployment at index 0 is undefined.",
+    );
+
+    expect(createPullRequestComment).not.toHaveBeenCalled();
+    expect(setOutput).not.toHaveBeenCalled();
+  });
+
   it("preserves both build and flush failures in the thrown error cause", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-05-22T00:00:00.000Z"));

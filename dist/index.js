@@ -17775,210 +17775,6 @@ function buildDeploymentRowKey(projectId, environment) {
 	return `${projectId}\u0000${environment}`;
 }
 //#endregion
-//#region src/shared/types.ts
-const ACTION_STATUSES = [
-	"success",
-	"failure",
-	"cancelled",
-	"skipped"
-];
-const COMMENT_ONLY_DEPLOYMENT_STATUSES = [
-	"ready",
-	"failed",
-	"cancelled",
-	"skipped",
-	"in_progress"
-];
-const MODES = ["deploy-and-comment", "comment-only"];
-//#endregion
-//#region src/action/input.ts
-var InputError = class extends Error {
-	constructor(message) {
-		super(message);
-		this.name = "InputError";
-	}
-};
-function readActionInputs(reader = core_exports) {
-	return parseActionInputs({
-		githubToken: reader.getInput("github-token"),
-		vercelToken: reader.getInput("vercel-token"),
-		mode: reader.getInput("mode") || "deploy-and-comment",
-		deploymentConcurrency: reader.getInput("deployment-concurrency") || "2",
-		deployments: reader.getInput("deployments", { required: true }),
-		header: reader.getInput("header") || "Vercel Preview Deployment",
-		footer: reader.getInput("footer", { trimWhitespace: false }),
-		commentMarker: reader.getInput("comment-marker") || "default",
-		status: reader.getInput("status") || "success",
-		commentOnFailure: reader.getInput("comment-on-failure") || "true"
-	});
-}
-function parseActionInputs(raw) {
-	const githubToken = requireNonEmpty(raw.githubToken, "github-token");
-	const vercelToken = optionalString(raw.vercelToken, "vercel-token");
-	const mode = parseEnum(raw.mode, MODES, "mode");
-	const status = parseEnum(raw.status, ACTION_STATUSES, "status");
-	const commentMarker = parseCommentMarker(raw.commentMarker);
-	const commonInputs = {
-		githubToken,
-		header: requireNonEmpty(raw.header, "header").replace(/\r?\n/g, " "),
-		footer: optionalString(raw.footer, "footer"),
-		commentMarker,
-		status,
-		commentOnFailure: parseBoolean(raw.commentOnFailure, "comment-on-failure")
-	};
-	if (mode === "deploy-and-comment") {
-		if (!vercelToken) throw new InputError("vercel-token is required when mode is deploy-and-comment.");
-		const deploymentConcurrency = parsePositiveInteger(raw.deploymentConcurrency, "deployment-concurrency");
-		return {
-			...commonInputs,
-			deploymentConcurrency,
-			vercelToken,
-			mode,
-			deployments: parseDeployments(raw.deployments, mode)
-		};
-	}
-	return {
-		...commonInputs,
-		vercelToken,
-		mode,
-		deployments: parseDeployments(raw.deployments, mode)
-	};
-}
-function parseDeployments(rawDeployments, mode) {
-	const raw = requireNonEmpty(rawDeployments, "deployments");
-	let parsed;
-	try {
-		parsed = JSON.parse(raw);
-	} catch (error) {
-		throw new InputError(`deployments must be valid JSON: ${formatCause(error)}`);
-	}
-	if (!Array.isArray(parsed) || parsed.length === 0) throw new InputError("deployments must be a non-empty JSON array.");
-	if (mode === "deploy-and-comment") {
-		const deployments = parsed.map((item, index) => parseDeployAndCommentDeploymentInput(item, index));
-		assertUniqueDeploymentKeys(deployments);
-		return deployments;
-	}
-	const deployments = parsed.map((item, index) => parseCommentOnlyDeploymentInput(item, index));
-	assertUniqueDeploymentKeys(deployments);
-	return deployments;
-}
-function assertUniqueDeploymentKeys(deployments) {
-	const seen = /* @__PURE__ */ new Map();
-	deployments.forEach((deployment, index) => {
-		const key = buildDeploymentRowKey(deployment.projectId, deployment.environment);
-		const firstIndex = seen.get(key);
-		if (firstIndex !== void 0) throw new InputError(`deployments[${index}] duplicates deployments[${firstIndex}] for projectId "${deployment.projectId}" and environment "${deployment.environment}". Each (projectId, environment) pair must be unique.`);
-		seen.set(key, index);
-	});
-}
-function parseDeploymentBase(item, index) {
-	rejectDeprecatedField(item, index, "command");
-	rejectDeprecatedField(item, index, "projectName");
-	const projectId = requireNonEmpty(item.projectId, `deployments[${index}].projectId`);
-	const environment = requireNonEmpty(item.environment, `deployments[${index}].environment`);
-	const projectUrl = requireHttpsUrl(item.projectUrl, `deployments[${index}].projectUrl`);
-	return {
-		displayName: optionalString(item.displayName, `deployments[${index}].displayName`),
-		environment,
-		projectId,
-		projectUrl,
-		teamId: optionalString(item.teamId, `deployments[${index}].teamId`),
-		slug: optionalString(item.slug, `deployments[${index}].slug`)
-	};
-}
-function parseDeployAndCommentDeploymentInput(item, index) {
-	const record = requireRecord(item, `deployments[${index}]`);
-	return {
-		...parseDeploymentBase(record, index),
-		cwd: requireNonEmpty(record.cwd, `deployments[${index}].cwd`),
-		deploymentUrl: optionalHttpsUrl(record.deploymentUrl, `deployments[${index}].deploymentUrl`),
-		orgId: requireNonEmpty(record.orgId, `deployments[${index}].orgId`)
-	};
-}
-function parseCommentOnlyDeploymentInput(item, index) {
-	const record = requireRecord(item, `deployments[${index}]`);
-	return {
-		...parseDeploymentBase(record, index),
-		deploymentUrl: requireHttpsUrl(record.deploymentUrl, `deployments[${index}].deploymentUrl`),
-		status: optionalEnum(record.status, COMMENT_ONLY_DEPLOYMENT_STATUSES, `deployments[${index}].status`)
-	};
-}
-function parseBoolean(value, field) {
-	const normalized = requireString(value, field).trim().toLowerCase();
-	if (normalized === "true") return true;
-	if (normalized === "false") return false;
-	throw new InputError(`${field} must be true or false.`);
-}
-function parsePositiveInteger(value, field) {
-	const normalized = requireString(value, field).trim();
-	if (!/^[1-9]\d*$/.test(normalized)) throw new InputError(`${field} must be a positive integer.`);
-	return Number.parseInt(normalized, 10);
-}
-function parseCommentMarker(value) {
-	const marker = requireNonEmpty(value, "comment-marker");
-	if (!/^[A-Za-z0-9_.:-]{1,64}$/.test(marker)) throw new InputError("comment-marker may contain only letters, numbers, underscore, period, colon, and hyphen.");
-	return marker;
-}
-function parseEnum(value, values, field) {
-	const normalized = requireString(value, field).trim();
-	const enumValue = values.find((candidate) => candidate === normalized);
-	if (enumValue !== void 0) return enumValue;
-	throw new InputError(`${field} must be one of: ${values.join(", ")}.`);
-}
-function optionalEnum(value, values, field) {
-	if (value === void 0 || value === null || value === "") return;
-	const normalized = requireString(value, field).trim();
-	if (normalized.length === 0) return;
-	const enumValue = values.find((candidate) => candidate === normalized);
-	if (enumValue !== void 0) return enumValue;
-	throw new InputError(`${field} must be one of: ${values.join(", ")}.`);
-}
-function requireNonEmpty(value, field) {
-	if (value === void 0 || value === null) throw new InputError(`${field} is required.`);
-	const trimmed = requireString(value, field).trim();
-	if (trimmed.length === 0) throw new InputError(`${field} is required.`);
-	return trimmed;
-}
-function optionalString(value, field) {
-	if (value === void 0 || value === null || value === "") return;
-	const trimmed = requireString(value, field).trim();
-	return trimmed.length > 0 ? trimmed : void 0;
-}
-function optionalHttpsUrl(value, field) {
-	if (value === void 0 || value === null || value === "") return;
-	if (typeof value !== "string") throw new InputError(`${field} must be a URL string.`);
-	return requireHttpsUrl(value, field);
-}
-function requireHttpsUrl(value, field) {
-	if (value === void 0 || value === null || value === "") throw new InputError(`${field} is required.`);
-	if (typeof value !== "string") throw new InputError(`${field} must be a URL string.`);
-	const raw = requireNonEmpty(value, field);
-	try {
-		const url = new URL(raw);
-		if (url.protocol !== "https:") throw new Error("URL must use https.");
-		return url.toString();
-	} catch (error) {
-		throw new InputError(`${field} must be a valid https URL: ${formatCause(error)}`);
-	}
-}
-function isRecord(value) {
-	return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-function requireRecord(value, field) {
-	if (!isRecord(value)) throw new InputError(`${field} must be an object.`);
-	return value;
-}
-function rejectDeprecatedField(value, index, field) {
-	if (Object.hasOwn(value, field)) throw new InputError(`deployments[${index}].${field} is no longer supported.`);
-}
-function formatCause(error) {
-	return error instanceof Error ? error.message : "unknown error";
-}
-function requireString(value, field) {
-	if (typeof value !== "string") throw new InputError(`${field} must be a string.`);
-	return value;
-}
-//#endregion
 //#region src/comment/markdown.ts
 const STANDARD_ENVIRONMENTS = new Set([
 	"preview",
@@ -18820,15 +18616,238 @@ function deploymentUrlToIdOrHost(value) {
 	return new URL(value).hostname;
 }
 //#endregion
-//#region src/main.ts
-async function run() {
+//#region src/shared/types.ts
+const ACTION_STATUSES = [
+	"success",
+	"failure",
+	"cancelled",
+	"skipped"
+];
+const COMMENT_ONLY_DEPLOYMENT_STATUSES = [
+	"ready",
+	"failed",
+	"cancelled",
+	"skipped",
+	"in_progress"
+];
+const MODES = ["deploy-and-comment", "comment-only"];
+//#endregion
+//#region src/action/input.ts
+var InputError = class extends Error {
+	constructor(message) {
+		super(message);
+		this.name = "InputError";
+	}
+};
+function readActionInputs(reader = core_exports) {
+	return parseActionInputs({
+		githubToken: reader.getInput("github-token"),
+		vercelToken: reader.getInput("vercel-token"),
+		mode: reader.getInput("mode") || "deploy-and-comment",
+		deploymentConcurrency: reader.getInput("deployment-concurrency") || "2",
+		deployments: reader.getInput("deployments", { required: true }),
+		header: reader.getInput("header") || "Vercel Preview Deployment",
+		footer: reader.getInput("footer", { trimWhitespace: false }),
+		commentMarker: reader.getInput("comment-marker") || "default",
+		status: reader.getInput("status") || "success",
+		commentOnFailure: reader.getInput("comment-on-failure") || "true"
+	});
+}
+function parseActionInputs(raw) {
+	const githubToken = requireNonEmpty(raw.githubToken, "github-token");
+	const vercelToken = optionalString(raw.vercelToken, "vercel-token");
+	const mode = parseEnum(raw.mode, MODES, "mode");
+	const status = parseEnum(raw.status, ACTION_STATUSES, "status");
+	const commentMarker = parseCommentMarker(raw.commentMarker);
+	const commonInputs = {
+		githubToken,
+		header: requireNonEmpty(raw.header, "header").replace(/\r?\n/g, " "),
+		footer: optionalString(raw.footer, "footer"),
+		commentMarker,
+		status,
+		commentOnFailure: parseBoolean(raw.commentOnFailure, "comment-on-failure")
+	};
+	if (mode === "deploy-and-comment") {
+		if (!vercelToken) throw new InputError("vercel-token is required when mode is deploy-and-comment.");
+		const deploymentConcurrency = parsePositiveInteger(raw.deploymentConcurrency, "deployment-concurrency");
+		return {
+			...commonInputs,
+			deploymentConcurrency,
+			vercelToken,
+			mode,
+			deployments: parseDeployments(raw.deployments, mode)
+		};
+	}
+	return {
+		...commonInputs,
+		vercelToken,
+		mode,
+		deployments: parseDeployments(raw.deployments, mode)
+	};
+}
+function parseDeployments(rawDeployments, mode) {
+	const raw = requireNonEmpty(rawDeployments, "deployments");
+	let parsed;
+	try {
+		parsed = JSON.parse(raw);
+	} catch (error) {
+		throw new InputError(`deployments must be valid JSON: ${formatCause(error)}`);
+	}
+	if (!Array.isArray(parsed) || parsed.length === 0) throw new InputError("deployments must be a non-empty JSON array.");
+	if (mode === "deploy-and-comment") {
+		const deployments = parsed.map((item, index) => parseDeployAndCommentDeploymentInput(item, index));
+		assertUniqueDeploymentKeys(deployments);
+		return deployments;
+	}
+	const deployments = parsed.map((item, index) => parseCommentOnlyDeploymentInput(item, index));
+	assertUniqueDeploymentKeys(deployments);
+	return deployments;
+}
+function assertUniqueDeploymentKeys(deployments) {
+	const seen = /* @__PURE__ */ new Map();
+	deployments.forEach((deployment, index) => {
+		const key = buildDeploymentRowKey(deployment.projectId, deployment.environment);
+		const firstIndex = seen.get(key);
+		if (firstIndex !== void 0) throw new InputError(`deployments[${index}] duplicates deployments[${firstIndex}] for projectId "${deployment.projectId}" and environment "${deployment.environment}". Each (projectId, environment) pair must be unique.`);
+		seen.set(key, index);
+	});
+}
+function parseDeploymentBase(item, index) {
+	rejectDeprecatedField(item, index, "command");
+	rejectDeprecatedField(item, index, "projectName");
+	const projectId = requireNonEmpty(item.projectId, `deployments[${index}].projectId`);
+	const environment = requireNonEmpty(item.environment, `deployments[${index}].environment`);
+	const projectUrl = requireHttpsUrl(item.projectUrl, `deployments[${index}].projectUrl`);
+	return {
+		displayName: optionalString(item.displayName, `deployments[${index}].displayName`),
+		environment,
+		projectId,
+		projectUrl,
+		teamId: optionalString(item.teamId, `deployments[${index}].teamId`),
+		slug: optionalString(item.slug, `deployments[${index}].slug`)
+	};
+}
+function parseDeployAndCommentDeploymentInput(item, index) {
+	const record = requireRecord(item, `deployments[${index}]`);
+	return {
+		...parseDeploymentBase(record, index),
+		cwd: requireNonEmpty(record.cwd, `deployments[${index}].cwd`),
+		deploymentUrl: optionalHttpsUrl(record.deploymentUrl, `deployments[${index}].deploymentUrl`),
+		orgId: requireNonEmpty(record.orgId, `deployments[${index}].orgId`)
+	};
+}
+function parseCommentOnlyDeploymentInput(item, index) {
+	const record = requireRecord(item, `deployments[${index}]`);
+	return {
+		...parseDeploymentBase(record, index),
+		deploymentUrl: requireHttpsUrl(record.deploymentUrl, `deployments[${index}].deploymentUrl`),
+		status: optionalEnum(record.status, COMMENT_ONLY_DEPLOYMENT_STATUSES, `deployments[${index}].status`)
+	};
+}
+function parseBoolean(value, field) {
+	const normalized = requireString(value, field).trim().toLowerCase();
+	if (normalized === "true") return true;
+	if (normalized === "false") return false;
+	throw new InputError(`${field} must be true or false.`);
+}
+function parsePositiveInteger(value, field) {
+	const normalized = requireString(value, field).trim();
+	if (!/^[1-9]\d*$/.test(normalized)) throw new InputError(`${field} must be a positive integer.`);
+	return Number.parseInt(normalized, 10);
+}
+function parseCommentMarker(value) {
+	const marker = requireNonEmpty(value, "comment-marker");
+	if (!/^[A-Za-z0-9_.:-]{1,64}$/.test(marker)) throw new InputError("comment-marker may contain only letters, numbers, underscore, period, colon, and hyphen.");
+	return marker;
+}
+function parseEnum(value, values, field) {
+	const normalized = requireString(value, field).trim();
+	const enumValue = values.find((candidate) => candidate === normalized);
+	if (enumValue !== void 0) return enumValue;
+	throw new InputError(`${field} must be one of: ${values.join(", ")}.`);
+}
+function optionalEnum(value, values, field) {
+	if (value === void 0 || value === null || value === "") return;
+	const normalized = requireString(value, field).trim();
+	if (normalized.length === 0) return;
+	const enumValue = values.find((candidate) => candidate === normalized);
+	if (enumValue !== void 0) return enumValue;
+	throw new InputError(`${field} must be one of: ${values.join(", ")}.`);
+}
+function requireNonEmpty(value, field) {
+	if (value === void 0 || value === null) throw new InputError(`${field} is required.`);
+	const trimmed = requireString(value, field).trim();
+	if (trimmed.length === 0) throw new InputError(`${field} is required.`);
+	return trimmed;
+}
+function optionalString(value, field) {
+	if (value === void 0 || value === null || value === "") return;
+	const trimmed = requireString(value, field).trim();
+	return trimmed.length > 0 ? trimmed : void 0;
+}
+function optionalHttpsUrl(value, field) {
+	if (value === void 0 || value === null || value === "") return;
+	if (typeof value !== "string") throw new InputError(`${field} must be a URL string.`);
+	return requireHttpsUrl(value, field);
+}
+function requireHttpsUrl(value, field) {
+	if (value === void 0 || value === null || value === "") throw new InputError(`${field} is required.`);
+	if (typeof value !== "string") throw new InputError(`${field} must be a URL string.`);
+	const raw = requireNonEmpty(value, field);
+	try {
+		const url = new URL(raw);
+		if (url.protocol !== "https:") throw new Error("URL must use https.");
+		return url.toString();
+	} catch (error) {
+		throw new InputError(`${field} must be a valid https URL: ${formatCause(error)}`);
+	}
+}
+function isRecord(value) {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function requireRecord(value, field) {
+	if (!isRecord(value)) throw new InputError(`${field} must be an object.`);
+	return value;
+}
+function rejectDeprecatedField(value, index, field) {
+	if (Object.hasOwn(value, field)) throw new InputError(`deployments[${index}].${field} is no longer supported.`);
+}
+function formatCause(error) {
+	return error instanceof Error ? error.message : "unknown error";
+}
+function requireString(value, field) {
+	if (typeof value !== "string") throw new InputError(`${field} must be a string.`);
+	return value;
+}
+//#endregion
+//#region src/action/runtime.ts
+function initializeActionRuntime(inputs = readActionInputs()) {
+	maskActionSecrets(inputs);
+	const context = readGitHubRuntimeContext();
+	return {
+		client: new GitHubClient(inputs.githubToken, context),
+		inputs,
+		runUrl: buildRunUrl(context)
+	};
+}
+function maskActionSecrets(inputs) {
+	setSecret(inputs.githubToken);
+	if (inputs.vercelToken) setSecret(inputs.vercelToken);
+}
+function sanitizeErrorMessage(error, inputs) {
+	let message = toError(error).message;
+	for (const secret of [inputs.githubToken, inputs.vercelToken]) if (secret) message = message.replaceAll(secret, "***");
+	return message;
+}
+function toError(error) {
+	return error instanceof Error ? error : new Error(String(error));
+}
+//#endregion
+//#region src/action/run.ts
+async function runActionMain() {
 	const inputs = readActionInputs();
 	try {
-		setSecret(inputs.githubToken);
-		if (inputs.vercelToken) setSecret(inputs.vercelToken);
-		const context = readGitHubRuntimeContext();
-		const runUrl = buildRunUrl(context);
-		const client = new GitHubClient(inputs.githubToken, context);
+		const { client, runUrl } = initializeActionRuntime(inputs);
 		const { buildRowsResult, comment } = inputs.mode === "deploy-and-comment" ? await runDeployAndComment(client, inputs, runUrl) : await runCommentOnly(client, inputs, runUrl);
 		setOutput("comment-id", String(comment.id));
 		setOutput("comment-url", comment.htmlUrl);
@@ -18838,6 +18857,19 @@ async function run() {
 		if (buildRowsResult.deployFailure) throw buildRowsResult.deployFailure;
 	} catch (error) {
 		throw new Error(sanitizeErrorMessage(error, inputs), { cause: toError(error) });
+	}
+}
+function getProjectName(deployment, projectDetails, deploymentDetails) {
+	if (deployment.displayName) return deployment.displayName;
+	if (projectDetails?.name) return projectDetails.name;
+	if (deploymentDetails?.project?.name) return deploymentDetails.project.name;
+	if (deploymentDetails?.name) return deploymentDetails.name;
+	return deployment.projectId;
+}
+function getDeploymentUrlFromError(error) {
+	if (typeof error === "object" && error !== null && "deploymentUrl" in error) {
+		const deploymentUrl = error.deploymentUrl;
+		return typeof deploymentUrl === "string" ? deploymentUrl : void 0;
 	}
 }
 async function resolveOptionalMetadata(resolveValue, inputs) {
@@ -18851,30 +18883,9 @@ async function resolveOptionalMetadata(resolveValue, inputs) {
 function buildRowKey(deployment) {
 	return buildDeploymentRowKey(deployment.projectId, deployment.environment);
 }
-function getProjectName(deployment, projectDetails, deploymentDetails) {
-	if (deployment.displayName) return deployment.displayName;
-	if (projectDetails?.name) return projectDetails.name;
-	if (deploymentDetails?.project?.name) return deploymentDetails.project.name;
-	if (deploymentDetails?.name) return deploymentDetails.name;
-	return deployment.projectId;
-}
 function getPreviewUrl(deploymentUrl, deploymentDetails) {
 	const rawUrl = deploymentDetails?.url ?? deploymentUrl;
 	return rawUrl ? toHttpUrl(rawUrl) : void 0;
-}
-function getDeploymentUrlFromError(error) {
-	if (typeof error === "object" && error !== null && "deploymentUrl" in error) {
-		const deploymentUrl = error.deploymentUrl;
-		return typeof deploymentUrl === "string" ? deploymentUrl : void 0;
-	}
-}
-function sanitizeErrorMessage(error, inputs) {
-	let message = toError(error).message;
-	for (const secret of [inputs.githubToken, inputs.vercelToken]) if (secret) message = message.replaceAll(secret, "***");
-	return message;
-}
-function toError(error) {
-	return error instanceof Error ? error : new Error(String(error));
 }
 async function runDeployAndComment(client, inputs, runUrl) {
 	const snapshot = await readManagedCommentSnapshot(client, inputs.commentMarker);
@@ -18888,24 +18899,23 @@ async function runDeployAndComment(client, inputs, runUrl) {
 		marker: inputs.commentMarker
 	});
 	await writer.publishInitialRows(buildInProgressRows(inputs.deployments, runUrl, (/* @__PURE__ */ new Date()).toISOString()));
-	let buildRowsResult;
-	let buildFailure;
-	try {
-		buildRowsResult = await buildDeployAndCommentRows(inputs, runUrl, writer);
-	} catch (error) {
-		buildFailure = error;
-	}
+	const buildRowsResultResult = await buildDeployAndCommentRows(inputs, runUrl, writer).then((value) => ({
+		ok: true,
+		value
+	})).catch((error) => ({
+		ok: false,
+		error
+	}));
 	let comment;
 	try {
 		comment = await writer.flush();
 	} catch (error) {
-		if (buildFailure) throw combineErrors(buildFailure, error, "failed to flush managed pull request comment updates");
+		if (!buildRowsResultResult.ok) throw combineErrors(buildRowsResultResult.error, error, "failed to flush managed pull request comment updates");
 		throw error;
 	}
-	if (buildFailure) throw buildFailure;
-	if (!buildRowsResult) throw new Error("Managed deploy run did not produce comment rows.");
+	if (!buildRowsResultResult.ok) throw buildRowsResultResult.error;
 	return {
-		buildRowsResult,
+		buildRowsResult: buildRowsResultResult.value,
 		comment
 	};
 }
@@ -18917,14 +18927,14 @@ async function runCommentOnly(client, inputs, runUrl) {
 	};
 }
 async function buildDeployAndCommentRows(inputs, runUrl, writer) {
-	const deploymentResults = await mapWithConcurrencyLimit(inputs.deployments, inputs.deploymentConcurrency, async (deployment, index) => {
-		if (deployment === void 0) throw new Error(`deployments[${index}] is missing.`);
-		let deploymentUrl = deployment.deploymentUrl;
+	const deploymentResults = await mapWithConcurrencyLimit(inputs.deployments, inputs.deploymentConcurrency, async (deployment, _index) => {
+		const resolvedDeployment = deployment;
+		let deploymentUrl = resolvedDeployment.deploymentUrl;
 		let deploymentFailed = false;
 		let deployFailure;
 		try {
 			deploymentUrl = await runVercelDeploy({
-				deployment,
+				deployment: resolvedDeployment,
 				token: inputs.vercelToken,
 				exec
 			});
@@ -18934,13 +18944,13 @@ async function buildDeployAndCommentRows(inputs, runUrl, writer) {
 			deploymentUrl = getDeploymentUrlFromError(error) ?? deploymentUrl;
 			warning(sanitizeErrorMessage(error, inputs));
 			if (!inputs.commentOnFailure) {
-				writer.restoreRow(deployment.projectId, deployment.environment);
+				writer.restoreRow(resolvedDeployment.projectId, resolvedDeployment.environment);
 				throw error;
 			}
 		}
-		const { projectDetails, deploymentDetails } = await resolveDeploymentMetadata(inputs, deployment, deploymentUrl);
+		const { projectDetails, deploymentDetails } = await resolveDeploymentMetadata(inputs, resolvedDeployment, deploymentUrl);
 		const builtRowResult = buildDeploymentRowResult({
-			deployment,
+			deployment: resolvedDeployment,
 			deploymentDetails,
 			deploymentFailed,
 			deploymentUrl,
@@ -19092,10 +19102,12 @@ function combineErrors(primaryError, secondaryError, secondaryContext) {
 	const contextualizedSecondaryError = new Error(`${secondaryContext}: ${normalizedSecondaryError.message}`, { cause: normalizedSecondaryError });
 	return new AggregateError([normalizedPrimaryError, contextualizedSecondaryError], `${normalizedPrimaryError.message}; ${secondaryContext}: ${normalizedSecondaryError.message}`, { cause: normalizedPrimaryError });
 }
-function isDirectRun() {
-	return Boolean(process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href);
+//#endregion
+//#region src/main.ts
+async function run() {
+	await runActionMain();
 }
-if (isDirectRun()) run().catch((error) => {
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) run().catch((error) => {
 	setFailed(toError(error).message);
 });
 //#endregion

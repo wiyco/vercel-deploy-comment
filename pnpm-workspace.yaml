@@ -1,3 +1,2 @@
 allowBuilds:
   lefthook: true
-  esbuild: false

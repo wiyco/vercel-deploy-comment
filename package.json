@@ -43,13 +43,13 @@
     "@actions/exec": "^3.0.0"
   },
   "devDependencies": {
-    "@biomejs/biome": "^2.4.15",
+    "@biomejs/biome": "2.5.0",
     "@types/node": "^24.12.4",
-    "@vitest/coverage-v8": "^4.1.6",
+    "@vitest/coverage-v8": "^4.1.9",
     "cspell": "^10.0.0",
     "lefthook": "^2.1.6",
-    "rolldown": "^1.0.0",
+    "rolldown": "1.1.2",
     "typescript": "^6.0.3",
-    "vitest": "^4.1.6"
+    "vitest": "^4.1.9"
   }
 }

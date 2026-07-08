@@ -18958,6 +18958,26 @@ async function runActionMain() {
 		throw new Error(sanitizeErrorMessage(error, inputs), { cause: toError(error) });
 	}
 }
+async function runActionPost(options = {}) {
+	let inputs;
+	try {
+		inputs = readActionInputs();
+		const cleanupStatus = resolvePostCleanupStatus(options);
+		if (!cleanupStatus) {
+			info("Post cleanup skipped because no terminal job status was set.");
+			return;
+		}
+		const { client, runUrl } = initializeActionRuntime(inputs);
+		const comment = await finalizeInProgressRows(client, inputs, runUrl, cleanupStatus);
+		if (!comment) {
+			info("Post cleanup found no in-progress rows to finalize.");
+			return;
+		}
+		info(`Post cleanup updated pull request comment: ${comment.htmlUrl}`);
+	} catch (error) {
+		warning(inputs ? sanitizeErrorMessage(error, inputs) : toError(error).message);
+	}
+}
 function getProjectName(deployment, projectDetails, deploymentDetails) {
 	if (deployment.displayName) return deployment.displayName;
 	if (projectDetails?.name) return projectDetails.name;
@@ -19192,6 +19212,34 @@ async function writeManagedCommentRows(client, inputs, nextRows, snapshot) {
 	if (existingCommentSnapshot.comment) return client.updatePullRequestComment(existingCommentSnapshot.comment.id, body);
 	return client.createPullRequestComment(body);
 }
+async function finalizeInProgressRows(client, inputs, runUrl, actionStatus) {
+	const snapshot = await readManagedCommentSnapshot(client, inputs.commentMarker);
+	if (!snapshot.comment) return;
+	const updatedRows = replaceInProgressRows(snapshot.rows, actionStatus, runUrl, (/* @__PURE__ */ new Date()).toISOString());
+	if (updatedRows === snapshot.rows) return;
+	const body = renderDeploymentComment({
+		header: inputs.header,
+		footer: inputs.footer,
+		marker: inputs.commentMarker,
+		rows: updatedRows
+	});
+	return client.updatePullRequestComment(snapshot.comment.id, body);
+}
+function replaceInProgressRows(rows, actionStatus, runUrl, updatedAtUtc) {
+	let changed = false;
+	const status = resolveDisplayStatus({ actionStatus });
+	const updatedRows = rows.map((row) => {
+		if (row.status.key !== "in_progress") return row;
+		changed = true;
+		return {
+			...row,
+			runUrl,
+			status,
+			updatedAtUtc
+		};
+	});
+	return changed ? updatedRows : rows;
+}
 function renderManagedCommentBody(inputs, existingRows, nextRows) {
 	const rows = upsertDeploymentCommentRows(existingRows, nextRows, inputs.deployments.map((deployment) => buildRowKey(deployment)));
 	return renderDeploymentComment({
@@ -19201,6 +19249,14 @@ function renderManagedCommentBody(inputs, existingRows, nextRows) {
 		rows
 	});
 }
+function resolvePostCleanupStatus(options) {
+	switch (options.mainOutcome) {
+		case "failure":
+		case "success": return "failure";
+		case "started": return "cancelled";
+		default: return;
+	}
+}
 function combineErrors(primaryError, secondaryError, secondaryContext) {
 	const normalizedPrimaryError = toError(primaryError);
 	const normalizedSecondaryError = toError(secondaryError);
@@ -19209,8 +19265,22 @@ function combineErrors(primaryError, secondaryError, secondaryContext) {
 }
 //#endregion
 //#region src/main.ts
+const POST_CLEANUP_REGISTERED_STATE = "vercelDeployCommentPostCleanupRegistered";
+const MAIN_OUTCOME_STATE = "vercelDeployCommentMainOutcome";
 async function run() {
-	await runActionMain();
+	if (getState(POST_CLEANUP_REGISTERED_STATE) === "true") {
+		await runActionPost({ mainOutcome: getState(MAIN_OUTCOME_STATE) });
+		return;
+	}
+	saveState(POST_CLEANUP_REGISTERED_STATE, "true");
+	saveState(MAIN_OUTCOME_STATE, "started");
+	try {
+		await runActionMain();
+		saveState(MAIN_OUTCOME_STATE, "success");
+	} catch (error) {
+		saveState(MAIN_OUTCOME_STATE, "failure");
+		throw error;
+	}
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) run().catch((error) => {
 	setFailed(toError(error).message);

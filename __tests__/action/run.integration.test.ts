@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { renderDeploymentComment } from "../../src/comment/markdown";
 
 const info = vi.fn();
 const setOutput = vi.fn();
@@ -704,5 +705,208 @@ describe("runActionMain", () => {
 
     expect(warning).toHaveBeenCalledWith("project lookup failed for ***");
     expect(createPullRequestComment).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("runActionPost", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.useRealTimers();
+    vi.resetModules();
+    readActionInputs.mockReturnValue({
+      githubToken: "ghs_token",
+      vercelToken: undefined,
+      mode: "comment-only",
+      deployments: [
+        {
+          environment: "preview",
+          projectId: "prj_web",
+          projectUrl: "https://vercel.com/team/web",
+          deploymentUrl: "https://web-git-feature-team.vercel.app",
+        },
+      ],
+      header: "Preview",
+      footer: undefined,
+      commentMarker: "default",
+      status: "success",
+      commentOnFailure: false,
+    });
+    findExistingActionComment.mockResolvedValue({
+      body: renderDeploymentComment({
+        header: "Preview",
+        marker: "default",
+        rows: [
+          {
+            environment: "preview",
+            projectId: "prj_web",
+            projectName: "web",
+            projectUrl: "https://vercel.com/team/web",
+            runUrl: "https://github.test/acme/repo/actions/runs/122",
+            status: {
+              key: "in_progress",
+              emoji: "\u23f3",
+              label: "In Progress",
+            },
+            updatedAtUtc: "2026-05-21T00:00:00.000Z",
+          },
+          {
+            environment: "preview",
+            projectId: "prj_docs",
+            projectName: "docs",
+            projectUrl: "https://vercel.com/team/docs",
+            previewUrl: "https://docs-git-feature-team.vercel.app",
+            runUrl: "https://github.test/acme/repo/actions/runs/122",
+            status: {
+              key: "ready",
+              emoji: "\u2705",
+              label: "Ready",
+            },
+            updatedAtUtc: "2026-05-21T00:00:00.000Z",
+          },
+        ],
+      }),
+      html_url: "https://github.test/acme/repo/pull/42#issuecomment-10",
+      id: 10,
+    });
+    updatePullRequestComment.mockResolvedValue({
+      action: "updated",
+      htmlUrl: "https://github.test/acme/repo/pull/42#issuecomment-10",
+      id: 10,
+    });
+  });
+
+  it("marks unresolved rows as failed after a failed job", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-05-22T00:00:00.000Z"));
+    const { runActionPost } = await import("../../src/action/run");
+
+    await expect(
+      runActionPost({
+        mainOutcome: "success",
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(updatePullRequestComment).toHaveBeenCalledTimes(1);
+    const body = updatePullRequestComment.mock.calls[0]?.[1];
+    expect(body).toContain("row:prj_web:preview");
+    expect(body).toContain("\u274c [Failed]");
+    expect(body).not.toContain("\u23f3 [In Progress]");
+    expect(body).toContain("\u2705 [Ready]");
+    expect(body).toContain("2026-05-22 00:00:00 UTC");
+  });
+
+  it("marks unresolved rows as cancelled when the main action did not finish", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-05-22T00:00:00.000Z"));
+    const { runActionPost } = await import("../../src/action/run");
+
+    await expect(
+      runActionPost({
+        mainOutcome: "started",
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(updatePullRequestComment).toHaveBeenCalledTimes(1);
+    expect(updatePullRequestComment.mock.calls[0]?.[1]).toContain(
+      "\ud83d\udeab [Cancelled]",
+    );
+  });
+
+  it("skips cleanup when there is no managed comment", async () => {
+    findExistingActionComment.mockResolvedValue(undefined);
+    const { runActionPost } = await import("../../src/action/run");
+
+    await expect(
+      runActionPost({
+        mainOutcome: "failure",
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(updatePullRequestComment).not.toHaveBeenCalled();
+    expect(info).toHaveBeenCalledWith(
+      "Post cleanup found no in-progress rows to finalize.",
+    );
+  });
+
+  it("skips cleanup when there is no terminal job status", async () => {
+    const { runActionPost } = await import("../../src/action/run");
+
+    await expect(runActionPost()).resolves.toBeUndefined();
+
+    expect(findExistingActionComment).not.toHaveBeenCalled();
+    expect(updatePullRequestComment).not.toHaveBeenCalled();
+    expect(info).toHaveBeenCalledWith(
+      "Post cleanup skipped because no terminal job status was set.",
+    );
+  });
+
+  it("skips cleanup when the managed comment has no in-progress rows", async () => {
+    findExistingActionComment.mockResolvedValue({
+      body: renderDeploymentComment({
+        header: "Preview",
+        marker: "default",
+        rows: [
+          {
+            environment: "preview",
+            projectId: "prj_docs",
+            projectName: "docs",
+            projectUrl: "https://vercel.com/team/docs",
+            previewUrl: "https://docs-git-feature-team.vercel.app",
+            runUrl: "https://github.test/acme/repo/actions/runs/122",
+            status: {
+              key: "ready",
+              emoji: "\u2705",
+              label: "Ready",
+            },
+            updatedAtUtc: "2026-05-21T00:00:00.000Z",
+          },
+        ],
+      }),
+      html_url: "https://github.test/acme/repo/pull/42#issuecomment-10",
+      id: 10,
+    });
+    const { runActionPost } = await import("../../src/action/run");
+
+    await expect(
+      runActionPost({
+        mainOutcome: "failure",
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(updatePullRequestComment).not.toHaveBeenCalled();
+    expect(info).toHaveBeenCalledWith(
+      "Post cleanup found no in-progress rows to finalize.",
+    );
+  });
+
+  it("warns without failing when cleanup cannot read inputs", async () => {
+    readActionInputs.mockImplementationOnce(() => {
+      throw new Error("input failed");
+    });
+    const { runActionPost } = await import("../../src/action/run");
+
+    await expect(
+      runActionPost({
+        mainOutcome: "failure",
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(warning).toHaveBeenCalledWith("input failed");
+    expect(updatePullRequestComment).not.toHaveBeenCalled();
+  });
+
+  it("warns with redacted secrets when cleanup update fails", async () => {
+    updatePullRequestComment.mockRejectedValue(
+      new Error("update failed with ghs_token"),
+    );
+    const { runActionPost } = await import("../../src/action/run");
+
+    await expect(
+      runActionPost({
+        mainOutcome: "failure",
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(warning).toHaveBeenCalledWith("update failed with ***");
   });
 });

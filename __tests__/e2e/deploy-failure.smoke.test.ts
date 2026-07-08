@@ -51,7 +51,7 @@ describe("deploy failure smoke", () => {
     });
 
     expect(result.exitCode).toBe(1);
-    expect(`${result.stdout}\n${result.stderr}`).toContain(
+    expect(result.failureDetails).toContain(
       "Vercel deploy failed with exit code 1.",
     );
     expect(JSON.parse(result.outputs.statuses ?? "[]")).toEqual([

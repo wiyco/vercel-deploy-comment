@@ -17,6 +17,8 @@ import {
   readFakeVercelCalls,
 } from "./create-fake-vercel-cli";
 
+const BUILT_ACTION_TIMEOUT_MS = 30_000;
+
 export interface FetchCall {
   body?: string;
   method: string;
@@ -36,8 +38,10 @@ export interface RecordedComment {
 
 export interface BuiltActionResult {
   comments: RecordedComment[];
+  error?: string;
   exitCode: number;
   fetchCalls: FetchCall[];
+  failureDetails: string;
   outputs: Record<string, string>;
   stderr: string;
   stdout: string;
@@ -153,8 +157,12 @@ export function runBuiltAction(options: {
         encoding: "utf8",
         env,
         maxBuffer: 10_000_000,
+        timeout: BUILT_ACTION_TIMEOUT_MS,
       },
     );
+    const spawnError = child.error ? formatSpawnError(child.error) : undefined;
+    const stdout = child.stdout ?? "";
+    const stderr = child.stderr ?? "";
     const fetchState = readJsonIfExists<FetchState>(fetchStatePath, {
       calls: [],
       comments: [],
@@ -162,11 +170,19 @@ export function runBuiltAction(options: {
 
     return {
       comments: fetchState.comments,
+      error: spawnError,
       exitCode: child.status ?? 1,
       fetchCalls: fetchState.calls,
+      failureDetails: [
+        spawnError ? `spawn error: ${spawnError}` : undefined,
+        stdout,
+        stderr,
+      ]
+        .filter(Boolean)
+        .join("\n"),
       outputs: parseActionOutputFile(outputPath),
-      stderr: child.stderr,
-      stdout: child.stdout,
+      stderr,
+      stdout,
       vercelCalls: fakeVercel ? readFakeVercelCalls(fakeVercel.logPath) : [],
     };
   } finally {
@@ -201,6 +217,16 @@ function toInputEnvironment(
       value,
     ]),
   );
+}
+
+function formatSpawnError(
+  error: Error & {
+    code?: unknown;
+  },
+): string {
+  const code = typeof error.code === "string" ? ` ${error.code}` : "";
+
+  return `${error.name}${code}: ${error.message}`;
 }
 
 function parseActionOutputFile(path: string): Record<string, string> {

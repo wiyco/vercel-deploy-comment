@@ -22,7 +22,7 @@ describe("comment-only smoke", () => {
       },
     });
 
-    expect(result.exitCode, `${result.stdout}\n${result.stderr}`).toBe(0);
+    expect(result.exitCode, result.failureDetails).toBe(0);
     expect(result.outputs["comment-id"]).toBe("1000");
     expect(result.outputs["comment-url"]).toBe(
       "https://github.test/octocat/repo/pull/42#issuecomment-1000",

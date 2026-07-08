@@ -51,7 +51,7 @@ describe("deploy-and-comment smoke", () => {
       },
     });
 
-    expect(result.exitCode, `${result.stdout}\n${result.stderr}`).toBe(0);
+    expect(result.exitCode, result.failureDetails).toBe(0);
     expect(result.vercelCalls.map((call) => call.args)).toEqual([
       [
         "pull",

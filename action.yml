@@ -44,6 +44,10 @@ inputs:
     description: "Whether deploy failures should still update the pull request comment before failing the action."
     required: false
     default: "true"
+  job-status:
+    description: "Internal GitHub Actions job status used by the post-execution cleanup."
+    required: false
+    default: ${{ job.status }}
 
 outputs:
   comment-id:

@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const setFailed = vi.fn();
+const getInput = vi.fn();
 const getState = vi.fn();
 const saveState = vi.fn();
 const runActionMain = vi.fn();
@@ -10,6 +11,7 @@ const toError = vi.fn((error: unknown) =>
 );
 
 vi.mock("@actions/core", () => ({
+  getInput,
   getState,
   saveState,
   setFailed,
@@ -28,6 +30,7 @@ describe("run", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.resetModules();
+    getInput.mockReturnValue("");
     getState.mockReturnValue("");
     runActionMain.mockResolvedValue(undefined);
     runActionPost.mockResolvedValue(undefined);
@@ -87,7 +90,9 @@ describe("run", () => {
     await expect(run()).resolves.toBeUndefined();
 
     expect(runActionMain).not.toHaveBeenCalled();
+    expect(getInput).toHaveBeenCalledWith("job-status");
     expect(runActionPost).toHaveBeenCalledWith({
+      jobStatus: "",
       mainOutcome: "failure",
     });
   });

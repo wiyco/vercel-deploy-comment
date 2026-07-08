@@ -19,6 +19,8 @@ This action deploys one or more Vercel projects, or accepts existing deployment 
 | `status` | No | `success` | Fallback GitHub Actions status when `deployments[].status` is unset and Vercel deployment details are unavailable. |
 | `comment-on-failure` | No | `true` | Whether deploy failures still upsert the affected rows before the action fails. |
 
+The action metadata also defines an internal `job-status` input with a default of `${{ job.status }}` so the JavaScript post cleanup can read the terminal job status.
+
 #### `deploy-and-comment` Entries
 
 | Field | Required | Description |
@@ -93,7 +95,7 @@ vercel deploy --prebuilt
 >
 > `deploy-and-comment` entries in one action invocation run in parallel up to `deployment-concurrency` at a time. Before the deploys start, the action performs one managed comment create-or-update with `In Progress` rows for the current input. As each row resolves, one in-process comment writer serializes a full-body update for that row against the same managed comment.
 >
-> The action also registers a JavaScript `post` cleanup that runs when the job is failing or cancelled. If the cleanup finds the managed comment and any unresolved `In Progress` rows, it updates only those rows to `Failed` or `Cancelled` and leaves already resolved rows unchanged.
+> The action also registers a JavaScript `post` cleanup that runs when the job is failing or cancelled. If the cleanup finds the managed comment, it updates only unresolved `In Progress` rows for the current `deployments` input whose status link already points at the current workflow run. Already resolved rows, unrelated row keys, and rows from other runs are left unchanged.
 >
 > This design makes same-`cwd`, multi-project and multi-environment deployments safe because local `.vercel` state is not shared between rows.
 >
@@ -173,7 +175,7 @@ When updating the PR comment, the action:
 4. Keeps the fetched row snapshot in memory for the rest of the run and replaces or inserts only the rows named in the current `deployments` input.
 5. Preserves unrelated existing rows from the startup snapshot.
 6. Re-renders the entire managed comment body for each queued row update without re-reading the full comment before every row.
-7. On failed or cancelled job cleanup, re-reads the managed comment and replaces any remaining `In Progress` rows with the terminal job status.
+7. On failed or cancelled job cleanup, re-reads the managed comment and replaces any current-run `In Progress` rows for the current `deployments` input with the terminal job status.
 
 ### Concurrency
 
@@ -228,7 +230,7 @@ Explicit `comment-only` `deployments[].status` is preferred when set. Otherwise 
 - If `comment-on-failure` is `false`, the action restores only the failed row to its startup snapshot state, or removes that row if it did not exist before the run. Other already-published row updates remain in the managed comment.
 - If a managed-comment write ultimately fails after retries, the action fails and leaves the last successfully published managed-comment body in place. It does not delete or restore the whole comment.
 - Vercel API enrichment failures do not block comment updates.
-- If the job fails or is cancelled after the action has written `In Progress` rows, the post-execution cleanup best-effort updates unresolved rows to `Failed` or `Cancelled`. Cleanup failures are logged as warnings so they do not mask the original job result.
+- If the job fails or is cancelled after the action has written `In Progress` rows, the post-execution cleanup best-effort updates unresolved current-run rows to `Failed` or `Cancelled` from `${{ job.status }}`. Cleanup failures are logged as warnings so they do not mask the original job result.
 
 ## Security Requirements
 

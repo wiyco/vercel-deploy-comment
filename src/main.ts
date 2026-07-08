@@ -6,10 +6,12 @@ import { toError } from "./action/runtime";
 const POST_CLEANUP_REGISTERED_STATE =
   "vercelDeployCommentPostCleanupRegistered";
 const MAIN_OUTCOME_STATE = "vercelDeployCommentMainOutcome";
+const JOB_STATUS_INPUT = "job-status";
 
 export async function run(): Promise<void> {
   if (core.getState(POST_CLEANUP_REGISTERED_STATE) === "true") {
     await runActionPost({
+      jobStatus: core.getInput(JOB_STATUS_INPUT),
       mainOutcome: core.getState(MAIN_OUTCOME_STATE),
     });
     return;

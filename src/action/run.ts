@@ -41,6 +41,7 @@ import {
 type PostCleanupStatus = Extract<ActionStatus, "failure" | "cancelled">;
 
 export interface PostCleanupOptions {
+  jobStatus?: string;
   mainOutcome?: string;
 }
 
@@ -599,12 +600,14 @@ async function finalizeInProgressRows(
     return undefined;
   }
 
-  const updatedRows = replaceInProgressRows(
-    snapshot.rows,
+  const updatedRows = replaceInProgressRows(snapshot.rows, {
     actionStatus,
     runUrl,
-    new Date().toISOString(),
-  );
+    targetRowKeys: new Set(
+      inputs.deployments.map((deployment) => buildRowKey(deployment)),
+    ),
+    updatedAtUtc: new Date().toISOString(),
+  });
 
   if (updatedRows === snapshot.rows) {
     return undefined;
@@ -622,25 +625,34 @@ async function finalizeInProgressRows(
 
 function replaceInProgressRows(
   rows: DeploymentCommentRow[],
-  actionStatus: PostCleanupStatus,
-  runUrl: string,
-  updatedAtUtc: string,
+  options: {
+    actionStatus: PostCleanupStatus;
+    runUrl: string;
+    targetRowKeys: ReadonlySet<string>;
+    updatedAtUtc: string;
+  },
 ): DeploymentCommentRow[] {
   let changed = false;
   const status = resolveDisplayStatus({
-    actionStatus,
+    actionStatus: options.actionStatus,
   });
   const updatedRows = rows.map((row) => {
-    if (row.status.key !== "in_progress") {
+    const rowKey = buildDeploymentRowKey(row.projectId, row.environment);
+
+    if (
+      row.status.key !== "in_progress" ||
+      !options.targetRowKeys.has(rowKey) ||
+      row.runUrl !== options.runUrl
+    ) {
       return row;
     }
 
     changed = true;
     return {
       ...row,
-      runUrl,
+      runUrl: options.runUrl,
       status,
-      updatedAtUtc,
+      updatedAtUtc: options.updatedAtUtc,
     };
   });
 
@@ -669,15 +681,19 @@ function renderManagedCommentBody(
 function resolvePostCleanupStatus(
   options: PostCleanupOptions,
 ): PostCleanupStatus | undefined {
-  switch (options.mainOutcome) {
-    case "failure":
-    case "success":
-      return "failure";
-    case "started":
-      return "cancelled";
-    default:
-      return undefined;
+  if (options.jobStatus === "failure" || options.jobStatus === "cancelled") {
+    return options.jobStatus;
   }
+
+  if (options.mainOutcome === "failure") {
+    return "failure";
+  }
+
+  if (options.mainOutcome === "started") {
+    return "cancelled";
+  }
+
+  return undefined;
 }
 
 function combineErrors(

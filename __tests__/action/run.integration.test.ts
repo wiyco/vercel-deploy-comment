@@ -1,5 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { renderDeploymentComment } from "../../src/comment/markdown";
+import {
+  parseDeploymentCommentRows,
+  renderDeploymentComment,
+} from "../../src/comment/markdown";
 
 const info = vi.fn();
 const setOutput = vi.fn();
@@ -709,6 +712,16 @@ describe("runActionMain", () => {
 });
 
 describe("runActionPost", () => {
+  function getUpdatedRows() {
+    const body = updatePullRequestComment.mock.calls[0]?.[1];
+
+    if (typeof body !== "string") {
+      throw new Error("Expected a comment body update.");
+    }
+
+    return parseDeploymentCommentRows(body);
+  }
+
   beforeEach(() => {
     vi.clearAllMocks();
     vi.useRealTimers();
@@ -741,7 +754,7 @@ describe("runActionPost", () => {
             projectId: "prj_web",
             projectName: "web",
             projectUrl: "https://vercel.com/team/web",
-            runUrl: "https://github.test/acme/repo/actions/runs/122",
+            runUrl: "https://github.test/acme/repo/actions/runs/123",
             status: {
               key: "in_progress",
               emoji: "\u23f3",
@@ -782,17 +795,52 @@ describe("runActionPost", () => {
 
     await expect(
       runActionPost({
+        jobStatus: "failure",
         mainOutcome: "success",
       }),
     ).resolves.toBeUndefined();
 
     expect(updatePullRequestComment).toHaveBeenCalledTimes(1);
-    const body = updatePullRequestComment.mock.calls[0]?.[1];
-    expect(body).toContain("row:prj_web:preview");
-    expect(body).toContain("\u274c [Failed]");
-    expect(body).not.toContain("\u23f3 [In Progress]");
-    expect(body).toContain("\u2705 [Ready]");
-    expect(body).toContain("2026-05-22 00:00:00 UTC");
+    const rows = getUpdatedRows();
+    expect(rows).toEqual([
+      expect.objectContaining({
+        projectId: "prj_web",
+        runUrl: "https://github.test/acme/repo/actions/runs/123",
+        status: expect.objectContaining({
+          key: "failed",
+        }),
+        updatedAtUtc: "2026-05-22 00:00:00 UTC",
+      }),
+      expect.objectContaining({
+        projectId: "prj_docs",
+        status: expect.objectContaining({
+          key: "ready",
+        }),
+      }),
+    ]);
+  });
+
+  it("marks unresolved rows as cancelled when the job is cancelled after main completed", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-05-22T00:00:00.000Z"));
+    const { runActionPost } = await import("../../src/action/run");
+
+    await expect(
+      runActionPost({
+        jobStatus: "cancelled",
+        mainOutcome: "success",
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(updatePullRequestComment).toHaveBeenCalledTimes(1);
+    expect(getUpdatedRows()[0]).toMatchObject({
+      projectId: "prj_web",
+      status: {
+        key: "cancelled",
+        emoji: "\ud83d\udeab",
+        label: "Cancelled",
+      },
+    });
   });
 
   it("marks unresolved rows as cancelled when the main action did not finish", async () => {
@@ -810,6 +858,115 @@ describe("runActionPost", () => {
     expect(updatePullRequestComment.mock.calls[0]?.[1]).toContain(
       "\ud83d\udeab [Cancelled]",
     );
+  });
+
+  it("keeps in-progress rows outside the current action invocation", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-05-22T00:00:00.000Z"));
+    readActionInputs.mockReturnValue({
+      githubToken: "ghs_token",
+      vercelToken: undefined,
+      mode: "comment-only",
+      deployments: [
+        {
+          environment: "preview",
+          projectId: "prj_web",
+          projectUrl: "https://vercel.com/team/web",
+          deploymentUrl: "https://web-git-feature-team.vercel.app",
+        },
+        {
+          environment: "preview",
+          projectId: "prj_admin",
+          projectUrl: "https://vercel.com/team/admin",
+          deploymentUrl: "https://admin-git-feature-team.vercel.app",
+        },
+      ],
+      header: "Preview",
+      footer: undefined,
+      commentMarker: "default",
+      status: "success",
+      commentOnFailure: false,
+    });
+    findExistingActionComment.mockResolvedValue({
+      body: renderDeploymentComment({
+        header: "Preview",
+        marker: "default",
+        rows: [
+          {
+            environment: "preview",
+            projectId: "prj_web",
+            projectName: "web",
+            projectUrl: "https://vercel.com/team/web",
+            runUrl: "https://github.test/acme/repo/actions/runs/123",
+            status: {
+              key: "in_progress",
+              emoji: "\u23f3",
+              label: "In Progress",
+            },
+            updatedAtUtc: "2026-05-21T00:00:00.000Z",
+          },
+          {
+            environment: "preview",
+            projectId: "prj_admin",
+            projectName: "admin",
+            projectUrl: "https://vercel.com/team/admin",
+            runUrl: "https://github.test/acme/repo/actions/runs/122",
+            status: {
+              key: "in_progress",
+              emoji: "\u23f3",
+              label: "In Progress",
+            },
+            updatedAtUtc: "2026-05-21T00:00:00.000Z",
+          },
+          {
+            environment: "preview",
+            projectId: "prj_api",
+            projectName: "api",
+            projectUrl: "https://vercel.com/team/api",
+            runUrl: "https://github.test/acme/repo/actions/runs/123",
+            status: {
+              key: "in_progress",
+              emoji: "\u23f3",
+              label: "In Progress",
+            },
+            updatedAtUtc: "2026-05-21T00:00:00.000Z",
+          },
+        ],
+      }),
+      html_url: "https://github.test/acme/repo/pull/42#issuecomment-10",
+      id: 10,
+    });
+    const { runActionPost } = await import("../../src/action/run");
+
+    await expect(
+      runActionPost({
+        jobStatus: "failure",
+        mainOutcome: "success",
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(updatePullRequestComment).toHaveBeenCalledTimes(1);
+    expect(getUpdatedRows()).toEqual([
+      expect.objectContaining({
+        projectId: "prj_web",
+        status: expect.objectContaining({
+          key: "failed",
+        }),
+      }),
+      expect.objectContaining({
+        projectId: "prj_admin",
+        runUrl: "https://github.test/acme/repo/actions/runs/122",
+        status: expect.objectContaining({
+          key: "in_progress",
+        }),
+      }),
+      expect.objectContaining({
+        projectId: "prj_api",
+        status: expect.objectContaining({
+          key: "in_progress",
+        }),
+      }),
+    ]);
   });
 
   it("skips cleanup when there is no managed comment", async () => {
@@ -832,6 +989,23 @@ describe("runActionPost", () => {
     const { runActionPost } = await import("../../src/action/run");
 
     await expect(runActionPost()).resolves.toBeUndefined();
+
+    expect(findExistingActionComment).not.toHaveBeenCalled();
+    expect(updatePullRequestComment).not.toHaveBeenCalled();
+    expect(info).toHaveBeenCalledWith(
+      "Post cleanup skipped because no terminal job status was set.",
+    );
+  });
+
+  it("skips cleanup when the post job status is success after main completion", async () => {
+    const { runActionPost } = await import("../../src/action/run");
+
+    await expect(
+      runActionPost({
+        jobStatus: "success",
+        mainOutcome: "success",
+      }),
+    ).resolves.toBeUndefined();
 
     expect(findExistingActionComment).not.toHaveBeenCalled();
     expect(updatePullRequestComment).not.toHaveBeenCalled();

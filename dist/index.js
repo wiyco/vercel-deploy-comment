@@ -19215,7 +19215,12 @@ async function writeManagedCommentRows(client, inputs, nextRows, snapshot) {
 async function finalizeInProgressRows(client, inputs, runUrl, actionStatus) {
 	const snapshot = await readManagedCommentSnapshot(client, inputs.commentMarker);
 	if (!snapshot.comment) return;
-	const updatedRows = replaceInProgressRows(snapshot.rows, actionStatus, runUrl, (/* @__PURE__ */ new Date()).toISOString());
+	const updatedRows = replaceInProgressRows(snapshot.rows, {
+		actionStatus,
+		runUrl,
+		targetRowKeys: new Set(inputs.deployments.map((deployment) => buildRowKey(deployment))),
+		updatedAtUtc: (/* @__PURE__ */ new Date()).toISOString()
+	});
 	if (updatedRows === snapshot.rows) return;
 	const body = renderDeploymentComment({
 		header: inputs.header,
@@ -19225,17 +19230,18 @@ async function finalizeInProgressRows(client, inputs, runUrl, actionStatus) {
 	});
 	return client.updatePullRequestComment(snapshot.comment.id, body);
 }
-function replaceInProgressRows(rows, actionStatus, runUrl, updatedAtUtc) {
+function replaceInProgressRows(rows, options) {
 	let changed = false;
-	const status = resolveDisplayStatus({ actionStatus });
+	const status = resolveDisplayStatus({ actionStatus: options.actionStatus });
 	const updatedRows = rows.map((row) => {
-		if (row.status.key !== "in_progress") return row;
+		const rowKey = buildDeploymentRowKey(row.projectId, row.environment);
+		if (row.status.key !== "in_progress" || !options.targetRowKeys.has(rowKey) || row.runUrl !== options.runUrl) return row;
 		changed = true;
 		return {
 			...row,
-			runUrl,
+			runUrl: options.runUrl,
 			status,
-			updatedAtUtc
+			updatedAtUtc: options.updatedAtUtc
 		};
 	});
 	return changed ? updatedRows : rows;
@@ -19250,12 +19256,9 @@ function renderManagedCommentBody(inputs, existingRows, nextRows) {
 	});
 }
 function resolvePostCleanupStatus(options) {
-	switch (options.mainOutcome) {
-		case "failure":
-		case "success": return "failure";
-		case "started": return "cancelled";
-		default: return;
-	}
+	if (options.jobStatus === "failure" || options.jobStatus === "cancelled") return options.jobStatus;
+	if (options.mainOutcome === "failure") return "failure";
+	if (options.mainOutcome === "started") return "cancelled";
 }
 function combineErrors(primaryError, secondaryError, secondaryContext) {
 	const normalizedPrimaryError = toError(primaryError);
@@ -19267,9 +19270,13 @@ function combineErrors(primaryError, secondaryError, secondaryContext) {
 //#region src/main.ts
 const POST_CLEANUP_REGISTERED_STATE = "vercelDeployCommentPostCleanupRegistered";
 const MAIN_OUTCOME_STATE = "vercelDeployCommentMainOutcome";
+const JOB_STATUS_INPUT = "job-status";
 async function run() {
 	if (getState(POST_CLEANUP_REGISTERED_STATE) === "true") {
-		await runActionPost({ mainOutcome: getState(MAIN_OUTCOME_STATE) });
+		await runActionPost({
+			jobStatus: getInput(JOB_STATUS_INPUT),
+			mainOutcome: getState(MAIN_OUTCOME_STATE)
+		});
 		return;
 	}
 	saveState(POST_CLEANUP_REGISTERED_STATE, "true");

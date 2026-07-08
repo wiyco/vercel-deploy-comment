@@ -53,6 +53,7 @@ jobs:
           cache: "pnpm"
       - run: pnpm install --frozen-lockfile
       - run: pnpm run build
+      - run: pnpm run test:smoke
       - name: Verify dist is up to date
         run: |
           if [ "$(git status --porcelain dist/)" != "" ]; then

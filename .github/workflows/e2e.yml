@@ -1,0 +1,37 @@
+name: E2E
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+jobs:
+  local-action:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Run local action
+        uses: ./
+        with:
+          github-token: ${{ github.token }}
+          mode: comment-only
+          comment-marker: e2e
+          header: Vercel Deploy Comment E2E
+          deployments: |
+            [
+              {
+                "projectId": "e2e-smoke",
+                "displayName": "E2E Smoke",
+                "environment": "preview",
+                "projectUrl": "https://vercel.com",
+                "deploymentUrl": "https://example.com",
+                "status": "skipped"
+              }
+            ]

@@ -94,6 +94,8 @@ For each `deploy-and-comment` entry, the action:
 >
 > Multiple `deploy-and-comment` entries within one action invocation run in parallel up to `deployment-concurrency` at a time. Before the deploys start, the managed PR comment is upserted with `In Progress` rows for the current input. As each row resolves, a single in-process writer serializes the managed comment updates for that run and publishes the latest row state.
 >
+> If the job fails or is cancelled while current-run rows are still `In Progress`, a post cleanup marks only those current deployment rows as `Failed` or `Cancelled`.
+>
 > Each row uses an isolated temp workspace, so repo-local `.vercel` state is not shared across projects or environments, including multiple rows that point at the same source `cwd`.
 
 > [!WARNING]

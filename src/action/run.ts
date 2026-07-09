@@ -38,6 +38,13 @@ import {
   toError,
 } from "./runtime";
 
+type PostCleanupStatus = Extract<ActionStatus, "failure" | "cancelled">;
+
+export interface PostCleanupOptions {
+  jobStatus?: string;
+  mainOutcome?: string;
+}
+
 export async function runActionMain(): Promise<void> {
   const inputs = readActionInputs();
 
@@ -64,6 +71,41 @@ export async function runActionMain(): Promise<void> {
     throw new Error(sanitizeErrorMessage(error, inputs), {
       cause: toError(error),
     });
+  }
+}
+
+export async function runActionPost(
+  options: PostCleanupOptions = {},
+): Promise<void> {
+  let inputs: ActionInputs | undefined;
+
+  try {
+    inputs = readActionInputs();
+    const cleanupStatus = resolvePostCleanupStatus(options);
+
+    if (!cleanupStatus) {
+      core.info("Post cleanup skipped because no terminal job status was set.");
+      return;
+    }
+
+    const { client, runUrl } = initializeActionRuntime(inputs);
+    const comment = await finalizeInProgressRows(
+      client,
+      inputs,
+      runUrl,
+      cleanupStatus,
+    );
+
+    if (!comment) {
+      core.info("Post cleanup found no in-progress rows to finalize.");
+      return;
+    }
+
+    core.info(`Post cleanup updated pull request comment: ${comment.htmlUrl}`);
+  } catch (error) {
+    core.warning(
+      inputs ? sanitizeErrorMessage(error, inputs) : toError(error).message,
+    );
   }
 }
 
@@ -543,6 +585,80 @@ async function writeManagedCommentRows(
   return client.createPullRequestComment(body);
 }
 
+async function finalizeInProgressRows(
+  client: ActionRuntime["client"],
+  inputs: ActionInputs,
+  runUrl: string,
+  actionStatus: PostCleanupStatus,
+): Promise<UpsertCommentResult | undefined> {
+  const snapshot = await readManagedCommentSnapshot(
+    client,
+    inputs.commentMarker,
+  );
+
+  if (!snapshot.comment) {
+    return undefined;
+  }
+
+  const updatedRows = replaceInProgressRows(snapshot.rows, {
+    actionStatus,
+    runUrl,
+    targetRowKeys: new Set(
+      inputs.deployments.map((deployment) => buildRowKey(deployment)),
+    ),
+    updatedAtUtc: new Date().toISOString(),
+  });
+
+  if (updatedRows === snapshot.rows) {
+    return undefined;
+  }
+
+  const body = renderDeploymentComment({
+    header: inputs.header,
+    footer: inputs.footer,
+    marker: inputs.commentMarker,
+    rows: updatedRows,
+  });
+
+  return client.updatePullRequestComment(snapshot.comment.id, body);
+}
+
+function replaceInProgressRows(
+  rows: DeploymentCommentRow[],
+  options: {
+    actionStatus: PostCleanupStatus;
+    runUrl: string;
+    targetRowKeys: ReadonlySet<string>;
+    updatedAtUtc: string;
+  },
+): DeploymentCommentRow[] {
+  let changed = false;
+  const status = resolveDisplayStatus({
+    actionStatus: options.actionStatus,
+  });
+  const updatedRows = rows.map((row) => {
+    const rowKey = buildDeploymentRowKey(row.projectId, row.environment);
+
+    if (
+      row.status.key !== "in_progress" ||
+      !options.targetRowKeys.has(rowKey) ||
+      row.runUrl !== options.runUrl
+    ) {
+      return row;
+    }
+
+    changed = true;
+    return {
+      ...row,
+      runUrl: options.runUrl,
+      status,
+      updatedAtUtc: options.updatedAtUtc,
+    };
+  });
+
+  return changed ? updatedRows : rows;
+}
+
 function renderManagedCommentBody(
   inputs: ActionInputs,
   existingRows: DeploymentCommentRow[],
@@ -560,6 +676,24 @@ function renderManagedCommentBody(
     marker: inputs.commentMarker,
     rows,
   });
+}
+
+function resolvePostCleanupStatus(
+  options: PostCleanupOptions,
+): PostCleanupStatus | undefined {
+  if (options.jobStatus === "failure" || options.jobStatus === "cancelled") {
+    return options.jobStatus;
+  }
+
+  if (options.mainOutcome === "failure") {
+    return "failure";
+  }
+
+  if (options.mainOutcome === "started") {
+    return "cancelled";
+  }
+
+  return undefined;
 }
 
 function combineErrors(
